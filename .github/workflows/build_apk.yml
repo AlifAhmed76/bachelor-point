@@ -1,0 +1,62 @@
+name: Build Bachelor Point Android APK & Web
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    name: Build Installable Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter Stable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Scaffold Flutter Project & Inject Bachelor Point Code
+        run: |
+          flutter create --org com.bachelorpoint --project-name bachelor_point .
+          dart run setup_project.dart
+          if [ -f "google-services.json" ]; then
+            cp google-services.json android/app/google-services.json
+          fi
+
+      - name: Configure Android Gradle for Firebase Google Services
+        run: |
+          python3 - << 'EOF'
+          import os, re
+
+          # Ensure minSdk is at least 23 for Firebase Auth/Firestore
+          for path in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
+              if os.path.exists(path):
+                  with open(path, 'r') as f:
+                      content = f.read()
+                  content = re.sub(r'minSdk\s*=?\s*flutter\.minSdkVersion', 'minSdk = 23', content)
+                  with open(path, 'w') as f:
+                      f.write(content)
+          EOF
+
+      - name: Install Flutter Dependencies
+        run: flutter pub get
+
+      - name: Build Release Android APK
+        run: flutter build apk --release --no-tree-shake-icons
+
+      - name: Upload Installable APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bachelor-Point-Android-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
