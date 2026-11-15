@@ -1,51 +1,14 @@
 import 'dart:io';
 
-/// Automated Cloud Builder Script for Bachelor Point.
-/// Generates the complete production multi-screen Flutter architecture inside GitHub Actions.
 void main() {
-  print('Generating Bachelor Point production source files...');
-
-  // 1. Create folder structure
-  final dirs = [
-    'assets/images/food',
-    'assets/images/avatars',
-    'lib/core/constants',
-    'lib/core/theme',
-    'lib/core/utils',
-    'lib/core/localization',
-    'lib/core/router',
-    'lib/domain/entities',
-    'lib/domain/calculators',
-    'lib/data/local',
-    'lib/data/remote',
-    'lib/data/repositories',
-    'lib/data/sync',
-    'lib/presentation/providers',
-    'lib/presentation/layouts',
-    'lib/presentation/features/auth',
-    'lib/presentation/features/mess',
-    'lib/presentation/features/meals',
-    'lib/presentation/features/vacation',
-    'lib/presentation/features/finance',
-    'lib/presentation/features/menu',
-    'lib/presentation/features/duties',
-    'lib/presentation/features/chat',
-    'lib/presentation/features/notices_complaints',
-    'lib/presentation/features/inventory',
-  ];
-
-  for (final d in dirs) {
-    Directory(d).createSync(recursive: true);
-  }
-
-  // Keep placeholder files in asset folders so pubspec.yaml succeeds
+  Directory('assets/images/food').createSync(recursive: true);
+  Directory('assets/images/avatars').createSync(recursive: true);
   File('assets/images/food/.gitkeep').writeAsStringSync('');
   File('assets/images/avatars/.gitkeep').writeAsStringSync('');
 
-  // 2. Write pubspec.yaml
   File('pubspec.yaml').writeAsStringSync(r'''
 name: bachelor_point
-description: Household Mess & Bachelor House Management System (Spark Plan Zero-Cost).
+description: Complete Household Mess & Bachelor House Management System.
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -56,7 +19,6 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_riverpod: ^2.6.1
-  go_router: ^14.6.2
   firebase_core: ^3.8.0
   firebase_auth: ^5.3.3
   cloud_firestore: ^5.5.0
@@ -64,8 +26,6 @@ dependencies:
   shared_preferences: ^2.3.3
   uuid: ^4.5.1
   intl: ^0.19.0
-  equatable: ^2.0.7
-  connectivity_plus: ^6.1.0
   google_fonts: ^6.2.1
 
 dev_dependencies:
@@ -80,17 +40,17 @@ flutter:
     - assets/images/avatars/
 ''');
 
-  // 3. Write complete consolidated application entrypoint & modules into lib/main.dart
-  File('lib/main.dart').writeAsStringSync(_mainAppCode);
-  print('Bachelor Point source generation complete!');
+  File('lib/main.dart').writeAsStringSync(_fullProductionApp);
+  print('Complete Bachelor Point production code injected successfully!');
 }
 
-const String _mainAppCode = r'''
+const String _fullProductionApp = r'''
 import 'dart:async';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -99,8 +59,13 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+typedef JsonMap = Map<String, dynamic>;
+typedef DocSnap = DocumentSnapshot<JsonMap>;
+typedef QuerySnap = QuerySnapshot<JsonMap>;
+typedef DocRef = DocumentReference<JsonMap>;
+
 // ============================================================================
-// 1. CORE CONSTANTS, ROLES, THEME & BDT PAISA FORMATTER
+// 1. ROLES, COLORS, BDT PAISA FORMATTER & DHAKA TIMEZONE
 // ============================================================================
 
 enum AppRole {
@@ -108,19 +73,17 @@ enum AppRole {
   coAdmin('co_admin', 'Co-Admin', 'কো-অ্যাডমিন'),
   manager('manager', 'Manager', 'ম্যানেজার'),
   member('member', 'Member', 'সদস্য'),
-  cookingStaff('cooking_staff', 'Cooking Staff', 'বাবুর্চি / রান্নার স্টাফ');
+  cookingStaff('cooking_staff', 'Cooking Staff', 'বাবুর্চি / খালা');
 
   const AppRole(this.value, this.labelEn, this.labelBn);
   final String value;
   final String labelEn;
   final String labelBn;
 
-  static AppRole fromString(String? value) {
-    return AppRole.values.firstWhere(
-      (r) => r.value == value,
-      orElse: () => AppRole.member,
-    );
-  }
+  static AppRole fromString(String? val) => AppRole.values.firstWhere(
+        (r) => r.value == val,
+        orElse: () => AppRole.member,
+      );
 
   bool get isAdminOrOwner => this == AppRole.owner || this == AppRole.coAdmin;
   bool get isManagement =>
@@ -132,73 +95,146 @@ enum AppRole {
 
 class AppColors {
   static const Color darkNavy = Color(0xFF0F172A);
-  static const Color slateNavy = Color(0xFF1E293B);
   static const Color emeraldPrimary = Color(0xFF059669);
   static const Color emeraldLight = Color(0xFF10B981);
-  static const Color lightBackground = Color(0xFFF8FAFC);
-  static const Color borderLight = Color(0xFFE2E8F0);
+  static const Color lightBg = Color(0xFFF8FAFC);
   static const Color dangerRed = Color(0xFFDC2626);
   static const Color warningAmber = Color(0xFFD97706);
 }
 
 class BdtFormatter {
   static final NumberFormat _fmt = NumberFormat('#,##0.00', 'en_US');
-
   static String formatPaisa(int paisa) {
     final bool neg = paisa < 0;
-    final double taka = paisa.abs() / 100.0;
-    return '${neg ? "-" : ""}৳${_fmt.format(taka)}';
+    return '${neg ? "-" : ""}৳${_fmt.format(paisa.abs() / 100.0)}';
   }
 
-  static int parseTakaToPaisa(String input) {
-    final cleaned = input.replaceAll(',', '').replaceAll('৳', '').trim();
-    if (cleaned.isEmpty) return 0;
-    final double val = double.tryParse(cleaned) ?? 0.0;
-    return (val * 100).round();
+  static int parseTakaToPaisa(String s) {
+    final clean = s.replaceAll(',', '').replaceAll('৳', '').trim();
+    return ((double.tryParse(clean) ?? 0.0) * 100).round();
   }
 }
 
-class DhakaDateUtils {
-  static DateTime nowInDhaka() =>
-      DateTime.now().toUtc().add(const Duration(hours: 6));
-
-  static String formatDateId(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
-  static String formatPeriodId(DateTime d) => DateFormat('yyyy-MM').format(d);
-  static String formatDisplay(DateTime d) =>
-      DateFormat('dd MMM yyyy').format(d);
+class DhakaDate {
+  static DateTime now() => DateTime.now().toUtc().add(const Duration(hours: 6));
+  static String dateId(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
+  static String periodId(DateTime d) => DateFormat('yyyy-MM').format(d);
 }
 
 // ============================================================================
-// 2. RIVERPOD PROVIDERS & STATE
+// 2. DOMAIN CALCULATORS (40-MEAL MINIMUM, VACATION PRORATION & LEDGER)
 // ============================================================================
 
-final sharedPrefsProvider = Provider<SharedPreferences>((_) {
-  throw UnimplementedError();
-});
+class MessCalculators {
+  static int uniqueApprovedLeaveDays({
+    required String memberId,
+    required String periodId,
+    required List<JsonMap> vacations,
+  }) {
+    final parts = periodId.split('-');
+    final int year = int.tryParse(parts[0]) ?? 2026;
+    final int month = parts.length > 1 ? (int.tryParse(parts[1]) ?? 11) : 11;
+    final DateTime mStart = DateTime.utc(year, month, 1);
+    final DateTime mEnd = DateTime.utc(year, month + 1, 0);
+    final Set<String> days = <String>{};
 
-final authStateProvider = StreamProvider<User?>((_) {
-  return FirebaseAuth.instance.authStateChanges();
-});
+    for (final v in vacations) {
+      if (v['memberId'] != memberId || v['status'] != 'approved') continue;
+      final DateTime? s = _parseUtc(v['startDate'] as String? ?? '');
+      final DateTime? e = _parseUtc(v['endDate'] as String? ?? '');
+      if (s == null || e == null || e.isBefore(s)) continue;
 
+      final DateTime effStart = s.isBefore(mStart) ? mStart : s;
+      final DateTime effEnd = e.isAfter(mEnd) ? mEnd : e;
+      DateTime cur = effStart;
+      while (!cur.isAfter(effEnd)) {
+        days.add(DhakaDate.dateId(cur));
+        cur = cur.add(const Duration(days: 1));
+      }
+    }
+    return days.length;
+  }
+
+  static DateTime? _parseUtc(String s) {
+    final p = s.split('-');
+    if (p.length != 3) return null;
+    return DateTime.utc(
+      int.tryParse(p[0]) ?? 2026,
+      int.tryParse(p[1]) ?? 1,
+      int.tryParse(p[2]) ?? 1,
+    );
+  }
+
+  static ({
+    double actualMeals,
+    int leaveDays,
+    double effectiveMin,
+    double calculatedMeals,
+    bool minApplied,
+  }) calculateMemberMeals({
+    required String memberId,
+    required String periodId,
+    required int defaultMinMeals,
+    required List<JsonMap> mealDocs,
+    required List<JsonMap> vacationDocs,
+  }) {
+    final parts = periodId.split('-');
+    final int year = int.tryParse(parts[0]) ?? 2026;
+    final int month = parts.length > 1 ? (int.tryParse(parts[1]) ?? 11) : 11;
+    final int daysInMonth = DateTime(year, month + 1, 0).day;
+
+    double actual = 0.0;
+    for (final m in mealDocs) {
+      if (m['memberId'] == memberId && m['periodId'] == periodId) {
+        actual += (m['totalMeals'] as num?)?.toDouble() ?? 0.0;
+      }
+    }
+
+    final int leaveDays = uniqueApprovedLeaveDays(
+      memberId: memberId,
+      periodId: periodId,
+      vacations: vacationDocs,
+    ).clamp(0, daysInMonth);
+
+    double effMin = defaultMinMeals.toDouble();
+    if (leaveDays >= 15) {
+      effMin = 0.0;
+    } else if (leaveDays > 0) {
+      final int activeDays = daysInMonth - leaveDays;
+      effMin = (((defaultMinMeals * activeDays) / daysInMonth) * 2).round() / 2.0;
+    }
+
+    final bool minApplied = actual < effMin;
+    return (
+      actualMeals: actual,
+      leaveDays: leaveDays,
+      effectiveMin: effMin,
+      calculatedMeals: minApplied ? effMin : actual,
+      minApplied: minApplied,
+    );
+  }
+}
+
+// ============================================================================
+// 3. GLOBAL PROVIDERS & APP BOOTSTRAP
+// ============================================================================
+
+final sharedPrefsProvider =
+    Provider<SharedPreferences>((_) => throw UnimplementedError());
+final authUserProvider =
+    StreamProvider<User?>((_) => FirebaseAuth.instance.authStateChanges());
 final activeMessIdProvider = StateProvider<String?>((ref) {
   return ref.watch(sharedPrefsProvider).getString('active_mess_id');
 });
-
-final localeIsBanglaProvider = StateProvider<bool>((_) => false);
-
-// ============================================================================
-// 3. MAIN BOOTSTRAP
-// ============================================================================
+final isBanglaProvider = StateProvider<bool>((_) => false);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-
   FirebaseFirestore.instance.settings = const Settings(
     persistenceEnabled: true,
     cacheSizeBytes: 100 * 1024 * 1024,
   );
-
   final prefs = await SharedPreferences.getInstance();
   runApp(
     ProviderScope(
@@ -213,25 +249,23 @@ class BachelorPointApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isBn = ref.watch(localeIsBanglaProvider);
-    final authAsync = ref.watch(authStateProvider);
-    final activeMessId = ref.watch(activeMessIdProvider);
-
-    final baseText = isBn
-        ? GoogleFonts.notoSansBengaliTextTheme()
-        : GoogleFonts.interTextTheme();
+    final isBn = ref.watch(isBanglaProvider);
+    final authAsync = ref.watch(authUserProvider);
+    final messId = ref.watch(activeMessIdProvider);
 
     return MaterialApp(
       title: 'Bachelor Point',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        scaffoldBackgroundColor: AppColors.lightBackground,
+        scaffoldBackgroundColor: AppColors.lightBg,
         colorScheme: const ColorScheme.light(
           primary: AppColors.darkNavy,
           secondary: AppColors.emeraldPrimary,
         ),
-        textTheme: baseText,
+        textTheme: isBn
+            ? GoogleFonts.notoSansBengaliTextTheme()
+            : GoogleFonts.interTextTheme(),
         appBarTheme: const AppBarTheme(
           backgroundColor: AppColors.darkNavy,
           foregroundColor: Colors.white,
@@ -240,10 +274,9 @@ class BachelorPointApp extends ConsumerWidget {
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.emeraldPrimary,
             foregroundColor: Colors.white,
-            minimumSize: const Size.fromHeight(50),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
+            minimumSize: const Size.fromHeight(48),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
         ),
       ),
@@ -251,14 +284,13 @@ class BachelorPointApp extends ConsumerWidget {
         loading: () => const Scaffold(
           backgroundColor: AppColors.darkNavy,
           body: Center(
-            child: CircularProgressIndicator(color: AppColors.emeraldLight),
-          ),
+              child: CircularProgressIndicator(color: AppColors.emeraldLight)),
         ),
         error: (e, _) => Scaffold(body: Center(child: Text('Error: $e'))),
         data: (user) {
           if (user == null) return const AuthScreen();
-          if (activeMessId == null) return const MessSelectorScreen();
-          return MainShellScreen(messId: activeMessId, currentUser: user);
+          if (messId == null) return const MessSwitcherScreen();
+          return MessWorkspaceShell(messId: messId, currentUser: user);
         },
       ),
     );
@@ -266,12 +298,11 @@ class BachelorPointApp extends ConsumerWidget {
 }
 
 // ============================================================================
-// 4. AUTHENTICATION SCREEN (LOGIN / REGISTER / RESET)
+// 4. AUTHENTICATION SCREEN (LOGIN / REGISTER / PASSWORD RESET)
 // ============================================================================
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
-
   @override
   ConsumerState<AuthScreen> createState() => _AuthScreenState();
 }
@@ -322,7 +353,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isBn = ref.watch(localeIsBanglaProvider);
+    final isBn = ref.watch(isBanglaProvider);
     return Scaffold(
       body: Center(
         child: ConstrainedBox(
@@ -336,11 +367,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Icon(Icons.home_work_rounded,
-                        size: 44, color: AppColors.emeraldPrimary),
+                        size: 46, color: AppColors.emeraldPrimary),
                     TextButton.icon(
-                      onPressed: () => ref
-                          .read(localeIsBanglaProvider.notifier)
-                          .state = !isBn,
+                      onPressed: () =>
+                          ref.read(isBanglaProvider.notifier).state = !isBn,
                       icon: const Icon(Icons.language),
                       label: Text(isBn ? 'English' : 'বাংলা'),
                     ),
@@ -352,11 +382,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   style: const TextStyle(
                       fontSize: 28, fontWeight: FontWeight.w800),
                 ),
-                Text(
-                  isBn
-                      ? 'স্বচ্ছ মেস ও ব্যাচেলর হাউস ম্যানেজমেন্ট'
-                      : 'Transparent Mess & Bachelor House Management',
-                ),
+                Text(isBn
+                    ? 'স্বচ্ছ মেস এবং ব্যাচেলর হাউস ম্যানেজমেন্ট'
+                    : 'Household Mess Management System'),
                 const SizedBox(height: 24),
                 if (_error != null)
                   Container(
@@ -393,7 +421,24 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     border: const OutlineInputBorder(),
                   ),
                 ),
-                const SizedBox(height: 20),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () async {
+                      if (_emailCtrl.text.trim().isEmpty) return;
+                      await FirebaseAuth.instance.sendPasswordResetEmail(
+                          email: _emailCtrl.text.trim());
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text('Password reset email sent!')),
+                        );
+                      }
+                    },
+                    child: Text(
+                        isBn ? 'পাসওয়ার্ড ভুলে গেছেন?' : 'Forgot Password?'),
+                  ),
+                ),
                 ElevatedButton(
                   onPressed: _loading ? null : _submit,
                   child: Text(_loading
@@ -402,16 +447,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                           ? (isBn ? 'লগইন করুন' : 'Log In')
                           : (isBn ? 'অ্যাকাউন্ট খুলুন' : 'Create Account'))),
                 ),
-                const SizedBox(height: 12),
                 TextButton(
                   onPressed: () => setState(() => _isLogin = !_isLogin),
                   child: Text(_isLogin
                       ? (isBn
-                          ? 'নতুন অ্যাকাউন্ট খুলতে এখানে ট্যাপ করুন'
-                          : 'Need an account? Register')
-                      : (isBn
-                          ? 'আগে থেকেই অ্যাকাউন্ট আছে? লগইন করুন'
-                          : 'Already have an account? Log In')),
+                          ? 'নতুন অ্যাকাউন্ট খুলুন'
+                          : 'Create a new account')
+                      : (isBn ? 'আগের অ্যাকাউন্টে লগইন' : 'Back to Login')),
                 ),
               ],
             ),
@@ -423,24 +465,22 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 }
 
 // ============================================================================
-// 5. MESS SELECTOR, CREATE MESS & JOIN BY INVITE CODE
+// 5. MESS SWITCHER, CREATE MESS & JOIN BY INVITE CODE
 // ============================================================================
 
-class MessSelectorScreen extends ConsumerStatefulWidget {
-  const MessSelectorScreen({super.key});
-
+class MessSwitcherScreen extends ConsumerStatefulWidget {
+  const MessSwitcherScreen({super.key});
   @override
-  ConsumerState<MessSelectorScreen> createState() => _MessSelectorScreenState();
+  ConsumerState<MessSwitcherScreen> createState() => _MessSwitcherScreenState();
 }
 
-class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
-  Future<void> _selectMess(String messId) async {
-    final prefs = ref.read(sharedPrefsProvider);
-    await prefs.setString('active_mess_id', messId);
+class _MessSwitcherScreenState extends ConsumerState<MessSwitcherScreen> {
+  Future<void> _activateMess(String messId) async {
+    await ref.read(sharedPrefsProvider).setString('active_mess_id', messId);
     ref.read(activeMessIdProvider.notifier).state = messId;
   }
 
-  Future<void> _showCreateMessDialog() async {
+  Future<void> _createMessDialog() async {
     final nameCtrl = TextEditingController();
     final addrCtrl = TextEditingController();
     final minCtrl = TextEditingController(text: '40');
@@ -448,7 +488,7 @@ class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Create New Mess (নতুন মেস)'),
+        title: const Text('Create New Mess (নতুন মেস তৈরি)'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -459,8 +499,7 @@ class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
             const SizedBox(height: 10),
             TextField(
               controller: addrCtrl,
-              decoration:
-                  const InputDecoration(labelText: 'Address (e.g. Mirpur-10)'),
+              decoration: const InputDecoration(labelText: 'House Address'),
             ),
             const SizedBox(height: 10),
             TextField(
@@ -476,12 +515,12 @@ class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
               onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () async {
+              if (nameCtrl.text.trim().isEmpty) return;
               final user = FirebaseAuth.instance.currentUser!;
               final db = FirebaseFirestore.instance;
               final messRef = db.collection('messes').doc();
               final messId = messRef.id;
-              final periodId =
-                  DhakaDateUtils.formatPeriodId(DhakaDateUtils.nowInDhaka());
+              final periodId = DhakaDate.periodId(DhakaDate.now());
               final minMeals = int.tryParse(minCtrl.text) ?? 40;
 
               final batch = db.batch();
@@ -512,6 +551,7 @@ class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
                 'joinedAt': FieldValue.serverTimestamp(),
                 'roleAssignedBy': user.uid,
                 'roleAssignedAt': FieldValue.serverTimestamp(),
+                'additionalPermissions': <String, bool>{},
               });
 
               batch.set(messRef.collection('accountingPeriods').doc(periodId), {
@@ -535,9 +575,86 @@ class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
 
               await batch.commit();
               if (ctx.mounted) Navigator.pop(ctx);
-              await _selectMess(messId);
+              await _activateMess(messId);
             },
             child: const Text('Create Mess'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _joinMessDialog() async {
+    final codeCtrl = TextEditingController();
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Join Mess via Invite Code'),
+        content: TextField(
+          controller: codeCtrl,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(
+            labelText: 'Invite Code (e.g. BP-8492-XK)',
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              final code = codeCtrl.text.trim().toUpperCase();
+              if (code.isEmpty) return;
+              final user = FirebaseAuth.instance.currentUser!;
+              final db = FirebaseFirestore.instance;
+
+              final snap = await db
+                  .collectionGroup('invitations')
+                  .where('inviteCode', isEqualTo: code)
+                  .where('status', isEqualTo: 'active')
+                  .limit(1)
+                  .get();
+
+              if (snap.docs.isEmpty) {
+                if (ctx.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Invalid or expired invite code.')),
+                  );
+                }
+                return;
+              }
+
+              final invDoc = snap.docs.first;
+              final messRef = invDoc.reference.parent.parent!;
+              final messId = messRef.id;
+
+              final batch = db.batch();
+              batch.set(messRef.collection('members').doc(user.uid), {
+                'userId': user.uid,
+                'displayName': user.displayName ?? user.email ?? 'Member',
+                'role': invDoc.data()['targetRole'] ?? 'member',
+                'membershipStatus': 'active',
+                'joinedAt': FieldValue.serverTimestamp(),
+                'roleAssignedBy': invDoc.data()['createdBy'],
+                'roleAssignedAt': FieldValue.serverTimestamp(),
+                'additionalPermissions': <String, bool>{},
+              });
+
+              batch.set(
+                db.collection('users').doc(user.uid),
+                {
+                  'uid': user.uid,
+                  'messIds': FieldValue.arrayUnion([messId]),
+                  'updatedAt': FieldValue.serverTimestamp(),
+                },
+                SetOptions(merge: true),
+              );
+
+              await batch.commit();
+              if (ctx.mounted) Navigator.pop(ctx);
+              await _activateMess(messId);
+            },
+            child: const Text('Join Mess'),
           ),
         ],
       ),
@@ -549,7 +666,7 @@ class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
     final user = FirebaseAuth.instance.currentUser!;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Select or Create Mess'),
+        title: const Text('Bachelor Point — My Messes'),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
@@ -557,7 +674,7 @@ class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
           ),
         ],
       ),
-      body: StreamBuilder<DocumentSnapshot>>(
+      body: StreamBuilder<DocSnap>(
         stream: FirebaseFirestore.instance
             .collection('users')
             .doc(user.uid)
@@ -577,30 +694,46 @@ class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
                         fontSize: 20, fontWeight: FontWeight.w800),
                   ),
                   const SizedBox(height: 16),
-                  if (messIds.isEmpty)
-                    const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text(
-                            'You have not joined any mess yet. Create your mess below to become the Owner.'),
-                      ),
-                    ),
                   ...messIds.map(
-                    (id) => Card(
-                      child: ListTile(
-                        leading: const Icon(Icons.apartment,
-                            color: AppColors.emeraldPrimary),
-                        title: Text('Mess ID: $id'),
-                        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                        onTap: () => _selectMess(id),
-                      ),
+                    (id) => FutureBuilder<DocSnap>(
+                      future: FirebaseFirestore.instance
+                          .collection('messes')
+                          .doc(id)
+                          .get(),
+                      builder: (context, mSnap) {
+                        final mName =
+                            mSnap.data?.data()?['messName'] ?? 'Mess $id';
+                        final mAddr = mSnap.data?.data()?['address'] ?? '';
+                        return Card(
+                          child: ListTile(
+                            leading: const CircleAvatar(
+                              backgroundColor: AppColors.darkNavy,
+                              child:
+                                  Icon(Icons.apartment, color: Colors.white),
+                            ),
+                            title: Text('$mName',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700)),
+                            subtitle: Text('$mAddr'),
+                            trailing:
+                                const Icon(Icons.arrow_forward_ios, size: 16),
+                            onTap: () => _activateMess(id),
+                          ),
+                        );
+                      },
                     ),
                   ),
                   const SizedBox(height: 24),
                   ElevatedButton.icon(
-                    onPressed: _showCreateMessDialog,
+                    onPressed: _createMessDialog,
                     icon: const Icon(Icons.add_home_work),
-                    label: const Text('Create New Mess (নতুন মেস খুলুন)'),
+                    label: const Text('Create New Mess (নতুন মেস তৈরি করুন)'),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _joinMessDialog,
+                    icon: const Icon(Icons.vpn_key),
+                    label: const Text('Join Existing Mess with Invite Code'),
                   ),
                 ],
               ),
@@ -613,11 +746,11 @@ class _MessSelectorScreenState extends ConsumerState<MessSelectorScreen> {
 }
 
 // ============================================================================
-// 6. MAIN SHELL (HOME, MEALS, HISAB, MENU/COOKING STAFF, CHAT)
+// 6. WORKSPACE SHELL (ROLE-AWARE: COOKING STAFF MODE VS MEMBER/ADMIN SHELL)
 // ============================================================================
 
-class MainShellScreen extends ConsumerStatefulWidget {
-  const MainShellScreen({
+class MessWorkspaceShell extends ConsumerStatefulWidget {
+  const MessWorkspaceShell({
     super.key,
     required this.messId,
     required this.currentUser,
@@ -627,25 +760,118 @@ class MainShellScreen extends ConsumerStatefulWidget {
   final User currentUser;
 
   @override
-  ConsumerState<MainShellScreen> createState() => _MainShellScreenState();
+  ConsumerState<MessWorkspaceShell> createState() => _MessWorkspaceShellState();
 }
 
-class _MainShellScreenState extends ConsumerState<MainShellScreen> {
+class _MessWorkspaceShellState extends ConsumerState<MessWorkspaceShell> {
   int _tab = 0;
 
   @override
-  Widget build(BuildContext context) {
-    final pages = [
-      _DashboardTab(messId: widget.messId, user: widget.currentUser),
-      _MealsTab(messId: widget.messId, user: widget.currentUser),
-      _HisabTab(messId: widget.messId, user: widget.currentUser),
-      _CookingMenuTab(messId: widget.messId, user: widget.currentUser),
-      _ChatTab(messId: widget.messId, user: widget.currentUser),
-    ];
+  void initState() {
+    super.initState();
+    final ref = FirebaseDatabase.instance
+        .ref('presence/${widget.messId}/${widget.currentUser.uid}');
+    ref.onDisconnect().set({
+      'online': false,
+      'lastActive': ServerValue.timestamp,
+    });
+    ref.set({
+      'online': true,
+      'lastActive': ServerValue.timestamp,
+    });
+  }
 
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocSnap>(
+      stream: FirebaseFirestore.instance
+          .collection('messes')
+          .doc(widget.messId)
+          .collection('members')
+          .doc(widget.currentUser.uid)
+          .snapshots(),
+      builder: (context, memberSnap) {
+        final memberData = memberSnap.data?.data() ?? <String, dynamic>{};
+        final role = AppRole.fromString(memberData['role'] as String?);
+
+        if (role.isCookingStaff) {
+          return CookingStaffModeView(messId: widget.messId);
+        }
+
+        final pages = [
+          HomeDashboardTab(
+            messId: widget.messId,
+            user: widget.currentUser,
+            role: role,
+          ),
+          MealAndVacationTab(
+            messId: widget.messId,
+            user: widget.currentUser,
+            role: role,
+          ),
+          HisabAndSettlementTab(
+            messId: widget.messId,
+            user: widget.currentUser,
+            role: role,
+          ),
+          GroupChatTab(
+            messId: widget.messId,
+            user: widget.currentUser,
+            role: role,
+          ),
+          ProfileAndMembersTab(
+            messId: widget.messId,
+            user: widget.currentUser,
+            role: role,
+          ),
+        ];
+
+        return Scaffold(
+          body: pages[_tab],
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _tab,
+            onDestinationSelected: (i) => setState(() => _tab = i),
+            destinations: const [
+              NavigationDestination(
+                  icon: Icon(Icons.home_outlined), label: 'Home'),
+              NavigationDestination(
+                  icon: Icon(Icons.restaurant_outlined), label: 'Meal'),
+              NavigationDestination(
+                  icon: Icon(Icons.receipt_long_outlined), label: 'Hisab'),
+              NavigationDestination(
+                  icon: Icon(Icons.chat_bubble_outline), label: 'Chat'),
+              NavigationDestination(
+                  icon: Icon(Icons.person_outline), label: 'Profile'),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ============================================================================
+// 7. TAB 1: HOME DASHBOARD & SECONDARY MODULES
+// ============================================================================
+
+class HomeDashboardTab extends ConsumerWidget {
+  const HomeDashboardTab({
+    super.key,
+    required this.messId,
+    required this.user,
+    required this.role,
+  });
+
+  final String messId;
+  final User user;
+  final AppRole role;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final periodId = DhakaDate.periodId(DhakaDate.now());
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Bachelor Point'),
+        title: Text('Bachelor Point (${role.labelEn})'),
         actions: [
           IconButton(
             tooltip: 'Switch Mess',
@@ -657,90 +883,200 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
           ),
         ],
       ),
-      body: pages[_tab],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
-          NavigationDestination(
-              icon: Icon(Icons.restaurant_outlined), label: 'Meal'),
-          NavigationDestination(
-              icon: Icon(Icons.receipt_long_outlined), label: 'Hisab'),
-          NavigationDestination(
-              icon: Icon(Icons.soup_kitchen_outlined), label: 'Menu'),
-          NavigationDestination(
-              icon: Icon(Icons.chat_bubble_outline), label: 'Chat'),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            color: AppColors.darkNavy,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Accounting Period: $periodId',
+                    style: const TextStyle(color: AppColors.emeraldLight),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${user.displayName ?? user.email} • ${role.labelBn}',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Minimum Rule: 40 Meals/Month • Prorated on Approved Vacation',
+                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Household Modules (সকল ফিচার)',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: 2,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 1.5,
+            children: [
+              _ActionTile(
+                icon: Icons.soup_kitchen,
+                title: 'Cooking Menu',
+                subtitle: 'আজ ও কালকের মেনু',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        DailyMenuScreen(messId: messId, user: user, role: role),
+                  ),
+                ),
+              ),
+              _ActionTile(
+                icon: Icons.elderly_woman,
+                title: 'Cooking Staff UI',
+                subtitle: 'বাবুর্চি বাংলা মোড',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => CookingStaffModeView(messId: messId),
+                  ),
+                ),
+              ),
+              _ActionTile(
+                icon: Icons.cleaning_services,
+                title: 'Cleaning Duties',
+                subtitle: 'ডিউটি ও রোটেশন',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        DutiesScreen(messId: messId, user: user, role: role),
+                  ),
+                ),
+              ),
+              _ActionTile(
+                icon: Icons.shopping_cart,
+                title: 'Shopping & Stock',
+                subtitle: 'বাজার লিস্ট ও ইনভেন্টরি',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ShoppingAndInventoryScreen(
+                        messId: messId, user: user, role: role),
+                  ),
+                ),
+              ),
+              _ActionTile(
+                icon: Icons.campaign,
+                title: 'Notices & Issues',
+                subtitle: 'নোটিশ ও অভিযোগ',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => NoticesAndComplaintsScreen(
+                        messId: messId, user: user, role: role),
+                  ),
+                ),
+              ),
+              _ActionTile(
+                icon: Icons.luggage,
+                title: 'Vacation Leave',
+                subtitle: 'ছুটি ও মিল অব্যাহতি',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        VacationScreen(messId: messId, user: user, role: role),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 }
 
-class _DashboardTab extends StatelessWidget {
-  const _DashboardTab({required this.messId, required this.user});
-  final String messId;
-  final User user;
+class _ActionTile extends StatelessWidget {
+  const _ActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final periodId =
-        DhakaDateUtils.formatPeriodId(DhakaDateUtils.nowInDhaka());
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          color: AppColors.darkNavy,
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Active Period: $periodId',
-                  style: const TextStyle(color: AppColors.emeraldLight),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Member: ${user.displayName ?? user.email}',
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: AppColors.emeraldPrimary, size: 28),
+              const SizedBox(height: 6),
+              Text(title,
                   style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Minimum Meal Rule: 40 Meals / Month (Prorated on Approved Leave)',
-                  style: TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-              ],
-            ),
+                      fontWeight: FontWeight.w800, fontSize: 14)),
+              Text(subtitle,
+                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            ],
           ),
         ),
-      ],
+      ),
     );
   }
 }
 
-class _MealsTab extends StatefulWidget {
-  const _MealsTab({required this.messId, required this.user});
+// ============================================================================
+// 8. TAB 2: MEAL ENTRY & 40-MEAL MINIMUM SUMMARY
+// ============================================================================
+
+class MealAndVacationTab extends StatefulWidget {
+  const MealAndVacationTab({
+    super.key,
+    required this.messId,
+    required this.user,
+    required this.role,
+  });
+
   final String messId;
   final User user;
+  final AppRole role;
 
   @override
-  State<_MealsTab> createState() => _MealsTabState();
+  State<MealAndVacationTab> createState() => _MealAndVacationTabState();
 }
 
-class _MealsTabState extends State<_MealsTab> {
+class _MealAndVacationTabState extends State<MealAndVacationTab> {
+  DateTime _selectedDate = DhakaDate.now();
   double _b = 1.0;
   double _l = 1.0;
   double _d = 1.0;
   int _guest = 0;
 
   Future<void> _saveMeal() async {
-    final now = DhakaDateUtils.nowInDhaka();
-    final dateId = DhakaDateUtils.formatDateId(now);
-    final periodId = DhakaDateUtils.formatPeriodId(now);
+    final dateId = DhakaDate.dateId(_selectedDate);
+    final periodId = DhakaDate.periodId(_selectedDate);
     final entryId = '${dateId}_${widget.user.uid}';
 
     await FirebaseFirestore.instance
@@ -766,310 +1102,43 @@ class _MealsTabState extends State<_MealsTab> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Saved ${_b + _l + _d + _guest} meals for $dateId')),
+        SnackBar(
+            content:
+                Text('Saved ${_b + _l + _d + _guest} meals for$dateId')),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                const Text('Today\'s Meal Entry (আজকের মিল)',
-                    style:
-                        TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 12),
-                SwitchListTile(
-                  title: const Text('Breakfast (সকাল — 1.0)'),
-                  value: _b > 0,
-                  onChanged: (v) => setState(() => _b = v ? 1.0 : 0.0),
-                ),
-                SwitchListTile(
-                  title: const Text('Lunch (দুপুর — 1.0)'),
-                  value: _l > 0,
-                  onChanged: (v) => setState(() => _l = v ? 1.0 : 0.0),
-                ),
-                SwitchListTile(
-                  title: const Text('Dinner (রাত — 1.0)'),
-                  value: _d > 0,
-                  onChanged: (v) => setState(() => _d = v ? 1.0 : 0.0),
-                ),
-                const SizedBox(height: 12),
-                ElevatedButton(
-                  onPressed: _saveMeal,
-                  child: const Text('Save Today\'s Meal'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _HisabTab extends StatelessWidget {
-  const _HisabTab({required this.messId, required this.user});
-  final String messId;
-  final User user;
-
-  @override
-  Widget build(BuildContext context) {
-    final periodId =
-        DhakaDateUtils.formatPeriodId(DhakaDateUtils.nowInDhaka());
-    final expStream = FirebaseFirestore.instance
+    final periodId = DhakaDate.periodId(_selectedDate);
+    final db = FirebaseFirestore.instance
         .collection('messes')
-        .doc(messId)
-        .collection('expenses')
-        .where('periodId', isEqualTo: periodId)
-        .snapshots();
+        .doc(widget.messId);
 
     return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addExpenseDialog(context, periodId),
-        icon: const Icon(Icons.add),
-        label: const Text('Add Bazar Expense'),
-      ),
-      body: StreamBuilder<QuerySnapshot>>(
-        stream: expStream,
-        builder: (context, snap) {
-          final docs = snap.data?.docs ?? [];
-          int totalPaisa = 0;
-          for (final d in docs) {
-            if (d.data()['status'] == 'verified') {
-              totalPaisa += (d.data()['amountPaisa'] as num?)?.toInt() ?? 0;
-            }
-          }
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              Card(
-                color: AppColors.darkNavy,
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Text(
-                    'Total Verified Expense ($periodId): ${BdtFormatter.formatPaisa(totalPaisa)}',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              ...docs.map((d) {
-                final data = d.data();
-                return Card(
-                  child: ListTile(
-                    title: Text(data['description'] ?? 'Bazar'),
-                    subtitle: Text(data['expenseDate'] ?? ''),
-                    trailing: Text(
-                      BdtFormatter.formatPaisa(
-                          (data['amountPaisa'] as num?)?.toInt() ?? 0),
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                );
-              }),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  void _addExpenseDialog(BuildContext context, String periodId) {
-    final descCtrl = TextEditingController();
-    final amtCtrl = TextEditingController();
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add Bazar Expense (বাজার খরচ)'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: descCtrl,
-              decoration: const InputDecoration(labelText: 'Description'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: amtCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Amount in BDT (৳)'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final paisa = BdtFormatter.parseTakaToPaisa(amtCtrl.text);
-              if (paisa <= 0) return;
-              final ref = FirebaseFirestore.instance
-                  .collection('messes')
-                  .doc(messId)
-                  .collection('expenses')
-                  .doc();
-              await ref.set({
-                'expenseId': ref.id,
-                'periodId': periodId,
-                'category': 'bazar',
-                'isMealExpense': true,
-                'description': descCtrl.text.trim(),
-                'amountPaisa': paisa,
-                'paidBy': user.uid,
-                'expenseDate': DhakaDateUtils.formatDateId(
-                    DhakaDateUtils.nowInDhaka()),
-                'createdBy': user.uid,
-                'idempotencyKey': const Uuid().v4(),
-                'status': 'verified',
-                'createdAt': FieldValue.serverTimestamp(),
-                'updatedAt': FieldValue.serverTimestamp(),
-              });
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CookingMenuTab extends StatelessWidget {
-  const _CookingMenuTab({required this.messId, required this.user});
-  final String messId;
-  final User user;
-
-  @override
-  Widget build(BuildContext context) {
-    final todayId = DhakaDateUtils.formatDateId(DhakaDateUtils.nowInDhaka());
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('আজকের রান্নার মেনু ($todayId)',
-                    style: const TextStyle(
-                        fontSize: 22, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 8),
-                const Text(
-                  'রুই মাছ, ডাল ও ভাত (Regular / Fish Category)',
-                  style: TextStyle(fontSize: 18),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ChatTab extends StatefulWidget {
-  const _ChatTab({required this.messId, required this.user});
-  final String messId;
-  final User user;
-
-  @override
-  State<_ChatTab> createState() => _ChatTabState();
-}
-
-class _ChatTabState extends State<_ChatTab> {
-  final _ctrl = TextEditingController();
-
-  Future<void> _send() async {
-    final text = _ctrl.text.trim();
-    if (text.isEmpty) return;
-    _ctrl.clear();
-    final ref = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(widget.messId)
-        .collection('chatMessages')
-        .doc();
-    await ref.set({
-      'messageId': ref.id,
-      'senderId': widget.user.uid,
-      'senderName': widget.user.displayName ?? 'Member',
-      'senderRole': 'owner',
-      'text': text,
-      'isDeleted': false,
-      'isFlagged': false,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final stream = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(widget.messId)
-        .collection('chatMessages')
-        .orderBy('createdAt', descending: true)
-        .limit(30)
-        .snapshots();
-
-    return Column(
-      children: [
-        Expanded(
-          child: StreamBuilder<QuerySnapshot>>(
-            stream: stream,
-            builder: (context, snap) {
-              final docs = snap.data?.docs ?? [];
-              return ListView.builder(
-                reverse: true,
-                padding: const EdgeInsets.all(16),
-                itemCount: docs.length,
-                itemBuilder: (context, i) {
-                  final d = docs[i].data();
-                  return Card(
-                    child: ListTile(
-                      title: Text(d['senderName'] ?? 'Member',
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700, fontSize: 13)),
-                      subtitle: Text(d['text'] ?? ''),
-                    ),
-                  );
-                },
-              );
-            },
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _ctrl,
-                  decoration: const InputDecoration(
-                    hintText: 'Write message...',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton.filled(
-                onPressed: _send,
-                icon: const Icon(Icons.send),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-''';
+      appBar: AppBar(title: Text('Meals & 40-Min Summary ($periodId)')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Date: ${DhakaDate.dateId(_selectedDate)}',
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w800),
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.calendar_today, size: 18),
+                        label: const Text('Change Date'),
+                        onPressed: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: _
