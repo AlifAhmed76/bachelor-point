@@ -117,7 +117,96 @@ class DhakaDate {
   static String periodId(DateTime d) => DateFormat('yyyy-MM').format(d);
 }
 
-// Global Providers
+class MessCalculators {
+  static int uniqueApprovedLeaveDays({
+    required String memberId,
+    required String periodId,
+    required List<JsonMap> vacations,
+  }) {
+    final parts = periodId.split('-');
+    final int year = int.tryParse(parts[0]) ?? 2026;
+    final int month = parts.length > 1 ? (int.tryParse(parts[1]) ?? 11) : 11;
+    final DateTime mStart = DateTime.utc(year, month, 1);
+    final DateTime mEnd = DateTime.utc(year, month + 1, 0);
+    final Set<String> days = <String>{};
+
+    for (final v in vacations) {
+      if (v['memberId'] != memberId || v['status'] != 'approved') continue;
+      final DateTime? s = _parseUtc(v['startDate'] as String? ?? '');
+      final DateTime? e = _parseUtc(v['endDate'] as String? ?? '');
+      if (s == null || e == null || e.isBefore(s)) continue;
+
+      final DateTime effStart = s.isBefore(mStart) ? mStart : s;
+      final DateTime effEnd = e.isAfter(mEnd) ? mEnd : e;
+      DateTime cur = effStart;
+      while (!cur.isAfter(effEnd)) {
+        days.add(DhakaDate.dateId(cur));
+        cur = cur.add(const Duration(days: 1));
+      }
+    }
+    return days.length;
+  }
+
+  static DateTime? _parseUtc(String s) {
+    final p = s.split('-');
+    if (p.length != 3) return null;
+    return DateTime.utc(
+      int.tryParse(p[0]) ?? 2026,
+      int.tryParse(p[1]) ?? 1,
+      int.tryParse(p[2]) ?? 1,
+    );
+  }
+
+  static ({
+    double actualMeals,
+    int leaveDays,
+    double effectiveMin,
+    double calculatedMeals,
+    bool minApplied,
+  }) calculateMemberMeals({
+    required String memberId,
+    required String periodId,
+    required int defaultMinMeals,
+    required List<JsonMap> mealDocs,
+    required List<JsonMap> vacationDocs,
+  }) {
+    final parts = periodId.split('-');
+    final int year = int.tryParse(parts[0]) ?? 2026;
+    final int month = parts.length > 1 ? (int.tryParse(parts[1]) ?? 11) : 11;
+    final int daysInMonth = DateTime(year, month + 1, 0).day;
+
+    double actual = 0.0;
+    for (final m in mealDocs) {
+      if (m['memberId'] == memberId && m['periodId'] == periodId) {
+        actual += (m['totalMeals'] as num?)?.toDouble() ?? 0.0;
+      }
+    }
+
+    final int leaveDays = uniqueApprovedLeaveDays(
+      memberId: memberId,
+      periodId: periodId,
+      vacations: vacationDocs,
+    ).clamp(0, daysInMonth);
+
+    double effMin = defaultMinMeals.toDouble();
+    if (leaveDays >= 15) {
+      effMin = 0.0;
+    } else if (leaveDays > 0) {
+      final int activeDays = daysInMonth - leaveDays;
+      effMin = (((defaultMinMeals * activeDays) / daysInMonth) * 2).round() / 2.0;
+    }
+
+    final bool minApplied = actual < effMin;
+    return (
+      actualMeals: actual,
+      leaveDays: leaveDays,
+      effectiveMin: effMin,
+      calculatedMeals: minApplied ? effMin : actual,
+      minApplied: minApplied,
+    );
+  }
+}
+
 final sharedPrefsProvider =
     Provider<SharedPreferences>((_) => throw UnimplementedError());
 final authUserProvider =
@@ -574,21 +663,6 @@ class _MessWorkspaceShellState extends ConsumerState<MessWorkspaceShell> {
   int _tab = 0;
 
   @override
-  void initState() {
-    super.initState();
-    final ref = FirebaseDatabase.instance
-        .ref('presence/${widget.messId}/${widget.currentUser.uid}');
-    ref.onDisconnect().set({
-      'online': false,
-      'lastActive': ServerValue.timestamp,
-    });
-    ref.set({
-      'online': true,
-      'lastActive': ServerValue.timestamp,
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocSnap>(
       stream: FirebaseFirestore.instance
@@ -708,21 +782,107 @@ class HomeDashboardTab extends ConsumerWidget {
   }
 }
 
-class MealAndVacationTab extends StatelessWidget {
+class MealAndVacationTab extends StatefulWidget {
   const MealAndVacationTab({
     super.key,
     required this.messId,
     required this.user,
     required this.role,
   });
+
   final String messId;
   final User user;
   final AppRole role;
 
   @override
+  State<MealAndVacationTab> createState() => _MealAndVacationTabState();
+}
+
+class _MealAndVacationTabState extends State<MealAndVacationTab> {
+  DateTime _selectedDate = DhakaDate.now();
+  double _b = 1.0;
+  double _l = 1.0;
+  double _d = 1.0;
+  int _guest = 0;
+
+  Future<void> _saveMeal() async {
+    final dateId = DhakaDate.dateId(_selectedDate);
+    final periodId = DhakaDate.periodId(_selectedDate);
+    final entryId = '${dateId}_${widget.user.uid}';
+
+    await FirebaseFirestore.instance
+        .collection('messes')
+        .doc(widget.messId)
+        .collection('mealEntries')
+        .doc(entryId)
+        .set({
+      'entryId': entryId,
+      'periodId': periodId,
+      'memberId': widget.user.uid,
+      'mealDate': dateId,
+      'breakfast': _b,
+      'lunch': _l,
+      'dinner': _d,
+      'guestMeals': _guest,
+      'totalMeals': _b + _l + _d + _guest,
+      'submittedBy': widget.user.uid,
+      'status': 'active',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content:
+                Text('Saved ${_b + _l + _d + _guest} meals for $dateId')),
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: Text('Meal & Vacation Management')),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Meal & Vacation Entry')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Date: ${DhakaDate.dateId(_selectedDate)}',
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w800),
+                  ),
+                  SwitchListTile(
+                    title: const Text('Breakfast (সকাল — 1.0)'),
+                    value: _b > 0,
+                    onChanged: (v) => setState(() => _b = v ? 1.0 : 0.0),
+                  ),
+                  SwitchListTile(
+                    title: const Text('Lunch (দুপুর — 1.0)'),
+                    value: _l > 0,
+                    onChanged: (v) => setState(() => _l = v ? 1.0 : 0.0),
+                  ),
+                  SwitchListTile(
+                    title: const Text('Dinner (রাত — 1.0)'),
+                    value: _d > 0,
+                    onChanged: (v) => setState(() => _d = v ? 1.0 : 0.0),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton(
+                    onPressed: _saveMeal,
+                    child: const Text('Save Daily Meal Entry'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -734,14 +894,19 @@ class HisabAndSettlementTab extends StatelessWidget {
     required this.user,
     required this.role,
   });
+
   final String messId;
   final User user;
   final AppRole role;
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: Text('Hisab & Ledger')),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Hisab & Ledger')),
+      body: const Center(
+        child: Text('Bazar Expenses & Member Deposits Ledger',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+      ),
     );
   }
 }
@@ -752,27 +917,101 @@ class CookingStaffModeView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: Text('বাবুর্চি মোড (Cooking Staff Mode)')),
+    return Scaffold(
+      appBar: AppBar(title: const Text('বাবুর্চি মোড')),
+      body: const Center(
+          child: Text('Cooking Staff Mode', style: TextStyle(fontSize: 20))),
     );
   }
 }
 
-class GroupChatTab extends StatelessWidget {
+class GroupChatTab extends StatefulWidget {
   const GroupChatTab({
     super.key,
     required this.messId,
     required this.user,
     required this.role,
   });
+
   final String messId;
   final User user;
   final AppRole role;
 
   @override
+  State<GroupChatTab> createState() => _GroupChatTabState();
+}
+
+class _GroupChatTabState extends State<GroupChatTab> {
+  final _ctrl = TextEditingController();
+
+  Future<void> _send() async {
+    final text = _ctrl.text.trim();
+    if (text.isEmpty) return;
+    _ctrl.clear();
+    await FirebaseFirestore.instance
+        .collection('messes')
+        .doc(widget.messId)
+        .collection('chatMessages')
+        .add({
+      'senderId': widget.user.uid,
+      'senderName': widget.user.displayName ?? 'Member',
+      'text': text,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: Text('Group Chat')),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Mess Group Chat')),
+      body: Column(
+        children: [
+          Expanded(
+            child: StreamBuilder<QuerySnap>(
+              stream: FirebaseFirestore.instance
+                  .collection('messes')
+                  .doc(widget.messId)
+                  .collection('chatMessages')
+                  .orderBy('createdAt', descending: true)
+                  .snapshots(),
+              builder: (context, snap) {
+                final docs = snap.data?.docs ?? [];
+                return ListView.builder(
+                  reverse: true,
+                  itemCount: docs.length,
+                  itemBuilder: (context, i) {
+                    final d = docs[i].data();
+                    return ListTile(
+                      title: Text(d['senderName'] ?? ''),
+                      subtitle: Text(d['text'] ?? ''),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _ctrl,
+                    decoration: const InputDecoration(
+                      hintText: 'Type message...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: _send,
+                  icon: const Icon(Icons.send, color: AppColors.emeraldPrimary),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -784,14 +1023,32 @@ class ProfileAndMembersTab extends StatelessWidget {
     required this.user,
     required this.role,
   });
+
   final String messId;
   final User user;
   final AppRole role;
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(child: Text('Profile & Settings')),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Profile & Settings')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          ListTile(
+            title: Text('Name: ${user.displayName ?? user.email}'),
+            subtitle: Text('Role: ${role.labelEn} (${role.labelBn})'),
+          ),
+          const Divider(),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.dangerRed),
+            onPressed: () => FirebaseAuth.instance.signOut(),
+            icon: const Icon(Icons.logout),
+            label: const Text('Log Out'),
+          ),
+        ],
+      ),
     );
   }
 }
