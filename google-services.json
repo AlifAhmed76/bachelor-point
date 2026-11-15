@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "292585571614",
+    "firebase_url": "https://bachelor-point-3c6cc-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "bachelor-point-3c6cc",
+    "storage_bucket": "bachelor-point-3c6cc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:292585571614:android:7301281d5692ef6ba6f50f",
+        "android_client_info": {
+          "package_name": "com.bachelorpoint.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "292585571614-k0h8p1vjc2osmbitvpnjs5vsnvbpn7r4.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCLgsOuNMXi7ITtbvatDyO9-XCRSrSHDUo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "292585571614-k0h8p1vjc2osmbitvpnjs5vsnvbpn7r4.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
