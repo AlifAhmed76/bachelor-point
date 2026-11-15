@@ -1,13 +1,14 @@
-name: Build Bachelor Point Android APK & Web
+
+name: Build Bachelor Point Android APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:
   build-android-apk:
-    name: Build Installable Android APK
+    name: Build Bachelor Point Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -17,46 +18,330 @@ jobs:
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
 
       - name: Set up Flutter Stable
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          channel: stable
           cache: true
 
-      - name: Scaffold Flutter Project & Inject Bachelor Point Code
+      - name: Scaffold Flutter Project
         run: |
           flutter create --org com.bachelorpoint --project-name bachelor_point .
           dart run setup_project.dart
-          if [ -f "google-services.json" ]; then
-            cp google-services.json android/app/google-services.json
-          fi
 
-      - name: Configure Android Gradle for Firebase Google Services
+      - name: Configure Firebase
         run: |
-          python3 - << 'EOF'
-          import os, re
+          test -f google-services.json || {
+            echo "ERROR: google-services.json missing"
+            exit 1
+          }
 
-          # Ensure minSdk is at least 23 for Firebase Auth/Firestore
-          for path in ['android/app/build.gradle', 'android/app/build.gradle.kts']:
-              if os.path.exists(path):
-                  with open(path, 'r') as f:
-                      content = f.read()
-                  content = re.sub(r'minSdk\s*=?\s*flutter\.minSdkVersion', 'minSdk = 23', content)
-                  with open(path, 'w') as f:
-                      f.write(content)
-          EOF
+          cp google-services.json android/app/google-services.json
+
+          python3 - <<'PY'
+          import json
+
+          config = json.load(open("google-services.json"))
+          packages = [
+              app["client_info"]["android_client_info"]["package_name"]
+              for app in config.get("client", [])
+          ]
+
+          if "com.bachelorpoint.app" not in packages:
+              raise SystemExit("Firebase package mismatch!")
+
+          print("Firebase package verified.")
+          PY
+
+      - name: Configure Android Gradle
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          # Configure app Gradle
+          groovy = Path("android/app/build.gradle")
+          kotlin = Path("android/app/build.gradle.kts")
+
+          if groovy.exists():
+              path = groovy
+              content = path.read_text()
+
+              content = re.sub(
+                  r'applicationId\s*(?:=\s*)?["\'][^"\']+["\']',
+                  'applicationId "com.bachelorpoint.app"',
+                  content
+              )
+
+              content = re.sub(
+                  r'minSdkVersion\s+flutter\.minSdkVersion',
+                  'minSdkVersion 23',
+                  content
+              )
+
+              content = re.sub(
+                  r'minSdk\s*=\s*flutter\.minSdkVersion',
+                  'minSdk = 23',
+                  content
+              )
+
+          elif kotlin.exists():
+              path = kotlin
+              content = path.read_text()
+
+              content = re.sub(
+                  r'applicationId\s*=\s*"[^"]+"',
+                  'applicationId = "com.bachelorpoint.app"',
+                  content
+              )
+
+              content = re.sub(
+                  r'minSdk\s*=\s*flutter\.minSdkVersion',
+                  'minSdk = 23',
+                  content
+              )
+
+          else:
+              raise SystemExit("App Gradle file not found")
+
+          if "applicationId" not in content:
+              content = re.sub(
+                  r'defaultConfig\s*\{',
+                  'defaultConfig {\n        applicationId "com.bachelorpoint.app"',
+                  content,
+                  count=1
+              )
+
+          path.write_text(content)
+
+          # Configure Google Services plugin version
+          settings = Path("android/settings.gradle")
+          settings_kts = Path("android/settings.gradle.kts")
+
+          if settings.exists():
+              path = settings
+              content = path.read_text()
+              plugin = 'id "com.google.gms.google-services" version "4.4.2" apply false'
+
+          elif settings_kts.exists():
+              path = settings_kts
+              content = path.read_text()
+              plugin = 'id("com.google.gms.google-services") version "4.4.2" apply false'
+
+          else:
+              raise SystemExit("Gradle settings file not found")
+
+          if "com.google.gms.google-services" not in content:
+              if "plugins {" not in content:
+                  raise SystemExit("Gradle plugins block not found")
+              content = content.replace(
+                  "plugins {",
+                  "plugins {\n    " + plugin,
+                  1
+              )
+
+          path.write_text(content)
+
+          # Apply Google Services plugin to app
+          content = path.read_text() if False else None
+
+          if groovy.exists():
+              path = groovy
+              content = path.read_text()
+              plugin_apply = 'id "com.google.gms.google-services"'
+          else:
+              path = kotlin
+              content = path.read_text()
+              plugin_apply = 'id("com.google.gms.google-services")'
+
+          if "com.google.gms.google-services" not in content:
+              if "plugins {" not in content:
+                  raise SystemExit("App Gradle plugins block not found")
+              content = content.replace(
+                  "plugins {",
+                  "plugins {\n    " + plugin_apply,
+                  1
+              )
+
+          path.write_text(content)
+
+          print("Android Gradle configured.")
+
+          PY
+
+      - name: Patch Flutter Startup
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("lib/main.dart")
+          source = path.read_text()
+
+          start_marker = "Future<void> main() async {"
+          end_marker = "class BachelorPointApp"
+
+          start = source.find(start_marker)
+          end = source.find(end_marker, start)
+
+          if start < 0 or end < 0:
+              raise SystemExit("Startup code markers not found. Build stopped.")
+
+          replacement = r'''
+          Future<void> main() async {
+            WidgetsFlutterBinding.ensureInitialized();
+            runApp(const _BootstrapApp());
+          }
+
+          class _BootstrapApp extends StatefulWidget {
+            const _BootstrapApp({super.key});
+
+            @override
+            State<_BootstrapApp> createState() => _BootstrapAppState();
+          }
+
+          class _BootstrapAppState extends State<_BootstrapApp> {
+            SharedPreferences? _prefs;
+            String? _startupError;
+            bool _loading = true;
+
+            @override
+            void initState() {
+              super.initState();
+              _initialize();
+            }
+
+            Future<void> _initialize() async {
+              try {
+                await Firebase.initializeApp().timeout(
+                  const Duration(seconds: 30),
+                );
+
+                FirebaseFirestore.instance.settings = const Settings(
+                  persistenceEnabled: true,
+                  cacheSizeBytes: 100 * 1024 * 1024,
+                );
+
+                final prefs = await SharedPreferences.getInstance();
+
+                if (!mounted) return;
+
+                setState(() {
+                  _prefs = prefs;
+                  _loading = false;
+                  _startupError = null;
+                });
+              } catch (e, stack) {
+                debugPrint('Bachelor Point startup error: $e');
+                debugPrintStack(stackTrace: stack);
+
+                if (!mounted) return;
+
+                setState(() {
+                  _startupError = e.toString();
+                  _loading = false;
+                });
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              if (_prefs != null) {
+                return ProviderScope(
+                  overrides: [
+                    sharedPrefsProvider.overrideWithValue(_prefs!),
+                  ],
+                  child: const BachelorPointApp(),
+                );
+              }
+
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                home: Scaffold(
+                  backgroundColor: AppColors.darkNavy,
+                  body: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: _loading
+                          ? const Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                CircularProgressIndicator(
+                                  color: AppColors.emeraldLight,
+                                ),
+                                SizedBox(height: 20),
+                                Text(
+                                  'Starting Bachelor Point...',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                              ],
+                            )
+                          : Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.error_outline,
+                                  color: Colors.redAccent,
+                                  size: 48,
+                                ),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  'App initialization failed',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                SelectableText(
+                                  _startupError ?? 'Unknown error',
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  'Please close and reopen the app after '
+                                  'checking your Firebase configuration.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.white70),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+
+          '''
+
+          path.write_text(
+              source[:start] + replacement + source[end:]
+          )
+
+          print("Startup bootstrap patch completed.")
+          PY
 
       - name: Install Flutter Dependencies
         run: flutter pub get
 
-      - name: Build Release Android APK
+      - name: Verify Android Package
+        run: |
+          grep -R "applicationId" android/app/
+          test -f android/app/google-services.json
+          flutter analyze --no-pub
+
+      - name: Build Release APK
         run: flutter build apk --release --no-tree-shake-icons
 
-      - name: Upload Installable APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Bachelor-Point-Android-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
