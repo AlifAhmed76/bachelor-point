@@ -64,10 +64,6 @@ typedef DocSnap = DocumentSnapshot<JsonMap>;
 typedef QuerySnap = QuerySnapshot<JsonMap>;
 typedef DocRef = DocumentReference<JsonMap>;
 
-// ============================================================================
-// 1. ROLES, COLORS, BDT PAISA FORMATTER & DHAKA TIMEZONE
-// ============================================================================
-
 enum AppRole {
   owner('owner', 'Owner', 'মেস মালিক'),
   coAdmin('co_admin', 'Co-Admin', 'কো-অ্যাডমিন'),
@@ -121,104 +117,7 @@ class DhakaDate {
   static String periodId(DateTime d) => DateFormat('yyyy-MM').format(d);
 }
 
-// ============================================================================
-// 2. DOMAIN CALCULATORS (40-MEAL MINIMUM, VACATION PRORATION & LEDGER)
-// ============================================================================
-
-class MessCalculators {
-  static int uniqueApprovedLeaveDays({
-    required String memberId,
-    required String periodId,
-    required List<JsonMap> vacations,
-  }) {
-    final parts = periodId.split('-');
-    final int year = int.tryParse(parts[0]) ?? 2026;
-    final int month = parts.length > 1 ? (int.tryParse(parts[1]) ?? 11) : 11;
-    final DateTime mStart = DateTime.utc(year, month, 1);
-    final DateTime mEnd = DateTime.utc(year, month + 1, 0);
-    final Set<String> days = <String>{};
-
-    for (final v in vacations) {
-      if (v['memberId'] != memberId || v['status'] != 'approved') continue;
-      final DateTime? s = _parseUtc(v['startDate'] as String? ?? '');
-      final DateTime? e = _parseUtc(v['endDate'] as String? ?? '');
-      if (s == null || e == null || e.isBefore(s)) continue;
-
-      final DateTime effStart = s.isBefore(mStart) ? mStart : s;
-      final DateTime effEnd = e.isAfter(mEnd) ? mEnd : e;
-      DateTime cur = effStart;
-      while (!cur.isAfter(effEnd)) {
-        days.add(DhakaDate.dateId(cur));
-        cur = cur.add(const Duration(days: 1));
-      }
-    }
-    return days.length;
-  }
-
-  static DateTime? _parseUtc(String s) {
-    final p = s.split('-');
-    if (p.length != 3) return null;
-    return DateTime.utc(
-      int.tryParse(p[0]) ?? 2026,
-      int.tryParse(p[1]) ?? 1,
-      int.tryParse(p[2]) ?? 1,
-    );
-  }
-
-  static ({
-    double actualMeals,
-    int leaveDays,
-    double effectiveMin,
-    double calculatedMeals,
-    bool minApplied,
-  }) calculateMemberMeals({
-    required String memberId,
-    required String periodId,
-    required int defaultMinMeals,
-    required List<JsonMap> mealDocs,
-    required List<JsonMap> vacationDocs,
-  }) {
-    final parts = periodId.split('-');
-    final int year = int.tryParse(parts[0]) ?? 2026;
-    final int month = parts.length > 1 ? (int.tryParse(parts[1]) ?? 11) : 11;
-    final int daysInMonth = DateTime(year, month + 1, 0).day;
-
-    double actual = 0.0;
-    for (final m in mealDocs) {
-      if (m['memberId'] == memberId && m['periodId'] == periodId) {
-        actual += (m['totalMeals'] as num?)?.toDouble() ?? 0.0;
-      }
-    }
-
-    final int leaveDays = uniqueApprovedLeaveDays(
-      memberId: memberId,
-      periodId: periodId,
-      vacations: vacationDocs,
-    ).clamp(0, daysInMonth);
-
-    double effMin = defaultMinMeals.toDouble();
-    if (leaveDays >= 15) {
-      effMin = 0.0;
-    } else if (leaveDays > 0) {
-      final int activeDays = daysInMonth - leaveDays;
-      effMin = (((defaultMinMeals * activeDays) / daysInMonth) * 2).round() / 2.0;
-    }
-
-    final bool minApplied = actual < effMin;
-    return (
-      actualMeals: actual,
-      leaveDays: leaveDays,
-      effectiveMin: effMin,
-      calculatedMeals: minApplied ? effMin : actual,
-      minApplied: minApplied,
-    );
-  }
-}
-
-// ============================================================================
-// 3. GLOBAL PROVIDERS & APP BOOTSTRAP
-// ============================================================================
-
+// Global Providers
 final sharedPrefsProvider =
     Provider<SharedPreferences>((_) => throw UnimplementedError());
 final authUserProvider =
@@ -251,7 +150,6 @@ class BachelorPointApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final isBn = ref.watch(isBanglaProvider);
     final authAsync = ref.watch(authUserProvider);
-    final messId = ref.watch(activeMessIdProvider);
 
     return MaterialApp(
       title: 'Bachelor Point',
@@ -281,25 +179,42 @@ class BachelorPointApp extends ConsumerWidget {
         ),
       ),
       home: authAsync.when(
-        loading: () => const Scaffold(
-          backgroundColor: AppColors.darkNavy,
-          body: Center(
-              child: CircularProgressIndicator(color: AppColors.emeraldLight)),
-        ),
+        loading: () => const SplashScreen(),
         error: (e, _) => Scaffold(body: Center(child: Text('Error: $e'))),
         data: (user) {
           if (user == null) return const AuthScreen();
-          if (messId == null) return const MessSwitcherScreen();
-          return MessWorkspaceShell(messId: messId, currentUser: user);
+          return const RootRouterHandler();
         },
       ),
     );
   }
 }
 
-// ============================================================================
-// 4. AUTHENTICATION SCREEN (LOGIN / REGISTER / PASSWORD RESET)
-// ============================================================================
+class SplashScreen extends StatelessWidget {
+  const SplashScreen({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: AppColors.darkNavy,
+      body: Center(
+        child: CircularProgressIndicator(color: AppColors.emeraldLight),
+      ),
+    );
+  }
+}
+
+class RootRouterHandler extends ConsumerWidget {
+  const RootRouterHandler({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final messId = ref.watch(activeMessIdProvider);
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return const AuthScreen();
+    if (messId == null) return const MessSwitcherScreen();
+    return MessWorkspaceShell(messId: messId, currentUser: user);
+  }
+}
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
@@ -421,24 +336,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     border: const OutlineInputBorder(),
                   ),
                 ),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: () async {
-                      if (_emailCtrl.text.trim().isEmpty) return;
-                      await FirebaseAuth.instance.sendPasswordResetEmail(
-                          email: _emailCtrl.text.trim());
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text('Password reset email sent!')),
-                        );
-                      }
-                    },
-                    child: Text(
-                        isBn ? 'পাসওয়ার্ড ভুলে গেছেন?' : 'Forgot Password?'),
-                  ),
-                ),
+                const SizedBox(height: 20),
                 ElevatedButton(
                   onPressed: _loading ? null : _submit,
                   child: Text(_loading
@@ -463,10 +361,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     );
   }
 }
-
-// ============================================================================
-// 5. MESS SWITCHER, CREATE MESS & JOIN BY INVITE CODE
-// ============================================================================
 
 class MessSwitcherScreen extends ConsumerStatefulWidget {
   const MessSwitcherScreen({super.key});
@@ -584,83 +478,6 @@ class _MessSwitcherScreenState extends ConsumerState<MessSwitcherScreen> {
     );
   }
 
-  Future<void> _joinMessDialog() async {
-    final codeCtrl = TextEditingController();
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Join Mess via Invite Code'),
-        content: TextField(
-          controller: codeCtrl,
-          textCapitalization: TextCapitalization.characters,
-          decoration: const InputDecoration(
-            labelText: 'Invite Code (e.g. BP-8492-XK)',
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final code = codeCtrl.text.trim().toUpperCase();
-              if (code.isEmpty) return;
-              final user = FirebaseAuth.instance.currentUser!;
-              final db = FirebaseFirestore.instance;
-
-              final snap = await db
-                  .collectionGroup('invitations')
-                  .where('inviteCode', isEqualTo: code)
-                  .where('status', isEqualTo: 'active')
-                  .limit(1)
-                  .get();
-
-              if (snap.docs.isEmpty) {
-                if (ctx.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text('Invalid or expired invite code.')),
-                  );
-                }
-                return;
-              }
-
-              final invDoc = snap.docs.first;
-              final messRef = invDoc.reference.parent.parent!;
-              final messId = messRef.id;
-
-              final batch = db.batch();
-              batch.set(messRef.collection('members').doc(user.uid), {
-                'userId': user.uid,
-                'displayName': user.displayName ?? user.email ?? 'Member',
-                'role': invDoc.data()['targetRole'] ?? 'member',
-                'membershipStatus': 'active',
-                'joinedAt': FieldValue.serverTimestamp(),
-                'roleAssignedBy': invDoc.data()['createdBy'],
-                'roleAssignedAt': FieldValue.serverTimestamp(),
-                'additionalPermissions': <String, bool>{},
-              });
-
-              batch.set(
-                db.collection('users').doc(user.uid),
-                {
-                  'uid': user.uid,
-                  'messIds': FieldValue.arrayUnion([messId]),
-                  'updatedAt': FieldValue.serverTimestamp(),
-                },
-                SetOptions(merge: true),
-              );
-
-              await batch.commit();
-              if (ctx.mounted) Navigator.pop(ctx);
-              await _activateMess(messId);
-            },
-            child: const Text('Join Mess'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser!;
@@ -729,12 +546,6 @@ class _MessSwitcherScreenState extends ConsumerState<MessSwitcherScreen> {
                     icon: const Icon(Icons.add_home_work),
                     label: const Text('Create New Mess (নতুন মেস তৈরি করুন)'),
                   ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: _joinMessDialog,
-                    icon: const Icon(Icons.vpn_key),
-                    label: const Text('Join Existing Mess with Invite Code'),
-                  ),
                 ],
               ),
             ),
@@ -744,10 +555,6 @@ class _MessSwitcherScreenState extends ConsumerState<MessSwitcherScreen> {
     );
   }
 }
-
-// ============================================================================
-// 6. WORKSPACE SHELL (ROLE-AWARE: COOKING STAFF MODE VS MEMBER/ADMIN SHELL)
-// ============================================================================
 
 class MessWorkspaceShell extends ConsumerStatefulWidget {
   const MessWorkspaceShell({
@@ -800,30 +607,15 @@ class _MessWorkspaceShellState extends ConsumerState<MessWorkspaceShell> {
 
         final pages = [
           HomeDashboardTab(
-            messId: widget.messId,
-            user: widget.currentUser,
-            role: role,
-          ),
+              messId: widget.messId, user: widget.currentUser, role: role),
           MealAndVacationTab(
-            messId: widget.messId,
-            user: widget.currentUser,
-            role: role,
-          ),
+              messId: widget.messId, user: widget.currentUser, role: role),
           HisabAndSettlementTab(
-            messId: widget.messId,
-            user: widget.currentUser,
-            role: role,
-          ),
+              messId: widget.messId, user: widget.currentUser, role: role),
           GroupChatTab(
-            messId: widget.messId,
-            user: widget.currentUser,
-            role: role,
-          ),
+              messId: widget.messId, user: widget.currentUser, role: role),
           ProfileAndMembersTab(
-            messId: widget.messId,
-            user: widget.currentUser,
-            role: role,
-          ),
+              messId: widget.messId, user: widget.currentUser, role: role),
         ];
 
         return Scaffold(
@@ -849,10 +641,6 @@ class _MessWorkspaceShellState extends ConsumerState<MessWorkspaceShell> {
     );
   }
 }
-
-// ============================================================================
-// 7. TAB 1: HOME DASHBOARD & SECONDARY MODULES
-// ============================================================================
 
 class HomeDashboardTab extends ConsumerWidget {
   const HomeDashboardTab({
@@ -914,363 +702,30 @@ class HomeDashboardTab extends ConsumerWidget {
               ),
             ),
           ),
-          const SizedBox(height: 16),
-          const Text(
-            'Household Modules (সকল ফিচার)',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 10),
-          GridView.count(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisCount: 2,
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 10,
-            childAspectRatio: 1.5,
-            children: [
-              _ActionTile(
-                icon: Icons.soup_kitchen,
-                title: 'Cooking Menu',
-                subtitle: 'আজ ও কালকের মেনু',
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        DailyMenuScreen(messId: messId, user: user, role: role),
-                  ),
-                ),
-              ),
-              _ActionTile(
-                icon: Icons.elderly_woman,
-                title: 'Cooking Staff UI',
-                subtitle: 'বাবুর্চি বাংলা মোড',
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => CookingStaffModeView(messId: messId),
-                  ),
-                ),
-              ),
-              _ActionTile(
-                icon: Icons.cleaning_services,
-                title: 'Cleaning Duties',
-                subtitle: 'ডিউটি ও রোটেশন',
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        DutiesScreen(messId: messId, user: user, role: role),
-                  ),
-                ),
-              ),
-              _ActionTile(
-                icon: Icons.shopping_cart,
-                title: 'Shopping & Stock',
-                subtitle: 'বাজার লিস্ট ও ইনভেন্টরি',
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ShoppingAndInventoryScreen(
-                        messId: messId, user: user, role: role),
-                  ),
-                ),
-              ),
-              _ActionTile(
-                icon: Icons.campaign,
-                title: 'Notices & Issues',
-                subtitle: 'নোটিশ ও অভিযোগ',
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => NoticesAndComplaintsScreen(
-                        messId: messId, user: user, role: role),
-                  ),
-                ),
-              ),
-              _ActionTile(
-                icon: Icons.luggage,
-                title: 'Vacation Leave',
-                subtitle: 'ছুটি ও মিল অব্যাহতি',
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        VacationScreen(messId: messId, user: user, role: role),
-                  ),
-                ),
-              ),
-            ],
-          ),
         ],
       ),
     );
   }
 }
 
-class _ActionTile extends StatelessWidget {
-  const _ActionTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: AppColors.emeraldPrimary, size: 28),
-              const SizedBox(height: 6),
-              Text(title,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w800, fontSize: 14)),
-              Text(subtitle,
-                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ============================================================================
-// 8. TAB 2: MEAL ENTRY & 40-MEAL MINIMUM SUMMARY
-// ============================================================================
-
-class MealAndVacationTab extends StatefulWidget {
+class MealAndVacationTab extends StatelessWidget {
   const MealAndVacationTab({
     super.key,
     required this.messId,
     required this.user,
     required this.role,
   });
-
   final String messId;
   final User user;
   final AppRole role;
 
   @override
-  State<MealAndVacationTab> createState() => _MealAndVacationTabState();
-}
-
-class _MealAndVacationTabState extends State<MealAndVacationTab> {
-  DateTime _selectedDate = DhakaDate.now();
-  double _b = 1.0;
-  double _l = 1.0;
-  double _d = 1.0;
-  int _guest = 0;
-
-  Future<void> _saveMeal() async {
-    final dateId = DhakaDate.dateId(_selectedDate);
-    final periodId = DhakaDate.periodId(_selectedDate);
-    final entryId = '${dateId}_${widget.user.uid}';
-
-    await FirebaseFirestore.instance
-        .collection('messes')
-        .doc(widget.messId)
-        .collection('mealEntries')
-        .doc(entryId)
-        .set({
-      'entryId': entryId,
-      'periodId': periodId,
-      'memberId': widget.user.uid,
-      'mealDate': dateId,
-      'breakfast': _b,
-      'lunch': _l,
-      'dinner': _d,
-      'guestMeals': _guest,
-      'totalMeals': _b + _l + _d + _guest,
-      'submittedBy': widget.user.uid,
-      'idempotencyKey': const Uuid().v4(),
-      'status': 'active',
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content:
-                Text('Saved ${_b + _l + _d + _guest} meals for $dateId')),
-      );
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final periodId = DhakaDate.periodId(_selectedDate);
-    final db = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(widget.messId);
-
-    return Scaffold(
-      appBar: AppBar(title: Text('Meals & 40-Min Summary ($periodId)')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Date: ${DhakaDate.dateId(_selectedDate)}',
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w800),
-                      ),
-                      TextButton.icon(
-                        icon: const Icon(Icons.calendar_today, size: 18),
-                        label: const Text('Change Date'),
-                        onPressed: () async {
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: _selectedDate,
-                            firstDate: DateTime(2025),
-                            lastDate: DateTime(2030),
-                          );
-                          if (picked != null) {
-                            setState(() => _selectedDate = picked);
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                  SwitchListTile(
-                    title: const Text('Breakfast (সকাল — 1.0)'),
-                    value: _b > 0,
-                    onChanged: (v) => setState(() => _b = v ? 1.0 : 0.0),
-                  ),
-                  SwitchListTile(
-                    title: const Text('Lunch (দুপুর — 1.0)'),
-                    value: _l > 0,
-                    onChanged: (v) => setState(() => _l = v ? 1.0 : 0.0),
-                  ),
-                  SwitchListTile(
-                    title: const Text('Dinner (রাত — 1.0)'),
-                    value: _d > 0,
-                    onChanged: (v) => setState(() => _d = v ? 1.0 : 0.0),
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Guest Meals (গেস্ট মিল):'),
-                      Row(
-                        children: [
-                          IconButton(
-                            onPressed: _guest > 0
-                                ? () => setState(() => _guest--)
-                                : null,
-                            icon: const Icon(Icons.remove_circle_outline),
-                          ),
-                          Text('$_guest',
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.w800)),
-                          IconButton(
-                            onPressed: () => setState(() => _guest++),
-                            icon: const Icon(Icons.add_circle_outline),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  ElevatedButton(
-                    onPressed: _saveMeal,
-                    child: const Text('Save Daily Meal Entry'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Monthly Member Meal Summary (40-Meal Rule Applied)',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 8),
-          StreamBuilder<QuerySnap>(
-            stream: db.collection('members').snapshots(),
-            builder: (context, memSnap) {
-              return StreamBuilder<QuerySnap>(
-                stream: db
-                    .collection('mealEntries')
-                    .where('periodId', isEqualTo: periodId)
-                    .snapshots(),
-                builder: (context, mealSnap) {
-                  return StreamBuilder<QuerySnap>(
-                    stream: db.collection('vacationRequests').snapshots(),
-                    builder: (context, vacSnap) {
-                      final members = memSnap.data?.docs ?? [];
-                      final meals =
-                          (mealSnap.data?.docs ?? []).map((d) => d.data()).toList();
-                      final vacations =
-                          (vacSnap.data?.docs ?? []).map((d) => d.data()).toList();
-
-                      return Column(
-                        children: members
-                            .where((m) => m.data()['role'] != 'cooking_staff')
-                            .map((m) {
-                          final uid = m.id;
-                          final name = m.data()['displayName'] ?? 'Member';
-                          final res = MessCalculators.calculateMemberMeals(
-                            memberId: uid,
-                            periodId: periodId,
-                            defaultMinMeals: 40,
-                            mealDocs: meals,
-                            vacationDocs: vacations,
-                          );
-                          return Card(
-                            child: ListTile(
-                              title: Text('$name',
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w700)),
-                              subtitle: Text(
-                                  'Actual: ${res.actualMeals} • Approved Leave: ${res.leaveDays}d • Min Threshold: ${res.effectiveMin}'),
-                              trailing: Text(
-                                '${res.calculatedMeals} Meals',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  color: res.minApplied
-                                      ? AppColors.warningAmber
-                                      : AppColors.emeraldPrimary,
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      );
-                    },
-                  );
-                },
-              );
-            },
-          ),
-        ],
-      ),
+    return const Scaffold(
+      body: Center(child: Text('Meal & Vacation Management')),
     );
   }
 }
-
-// ============================================================================
-// 9. TAB 3: HISAB, EXPENSES, DEPOSITS & LEDGER
-// ============================================================================
 
 class HisabAndSettlementTab extends StatelessWidget {
   const HisabAndSettlementTab({
@@ -1279,504 +734,14 @@ class HisabAndSettlementTab extends StatelessWidget {
     required this.user,
     required this.role,
   });
-
   final String messId;
   final User user;
   final AppRole role;
 
   @override
   Widget build(BuildContext context) {
-    final periodId = DhakaDate.periodId(DhakaDate.now());
-    final db = FirebaseFirestore.instance.collection('messes').doc(messId);
-
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text('Hisab & Ledger ($periodId)'),
-          bottom: const TabBar(
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white70,
-            tabs: [
-              Tab(text: 'Ledger'),
-              Tab(text: 'Expenses'),
-              Tab(text: 'Deposits'),
-            ],
-          ),
-        ),
-        body: TabBarView(
-          children: [
-            StreamBuilder<QuerySnap>(
-              stream: db.collection('members').snapshots(),
-              builder: (context, memSnap) {
-                return StreamBuilder<QuerySnap>(
-                  stream: db
-                      .collection('mealEntries')
-                      .where('periodId', isEqualTo: periodId)
-                      .snapshots(),
-                  builder: (context, mealSnap) {
-                    return StreamBuilder<QuerySnap>(
-                      stream: db
-                          .collection('expenses')
-                          .where('periodId', isEqualTo: periodId)
-                          .snapshots(),
-                      builder: (context, expSnap) {
-                        return StreamBuilder<QuerySnap>(
-                          stream: db
-                              .collection('deposits')
-                              .where('periodId', isEqualTo: periodId)
-                              .snapshots(),
-                          builder: (context, depSnap) {
-                            final members = (memSnap.data?.docs ?? [])
-                                .where(
-                                    (m) => m.data()['role'] != 'cooking_staff')
-                                .toList();
-                            final meals = (mealSnap.data?.docs ?? [])
-                                .map((d) => d.data())
-                                .toList();
-                            final expenses = (expSnap.data?.docs ?? [])
-                                .map((d) => d.data())
-                                .where((e) => e['status'] == 'verified')
-                                .toList();
-                            final deposits = (depSnap.data?.docs ?? [])
-                                .map((d) => d.data())
-                                .toList();
-
-                            int totalFoodExpensePaisa = 0;
-                            for (final e in expenses) {
-                              totalFoodExpensePaisa +=
-                                  (e['amountPaisa'] as num?)?.toInt() ?? 0;
-                            }
-
-                            double totalCalcMeals = 0.0;
-                            final Map<String, double> memberCalcMap = {};
-                            for (final m in members) {
-                              final r = MessCalculators.calculateMemberMeals(
-                                memberId: m.id,
-                                periodId: periodId,
-                                defaultMinMeals: 40,
-                                mealDocs: meals,
-                                vacationDocs: const [],
-                              );
-                              memberCalcMap[m.id] = r.calculatedMeals;
-                              totalCalcMeals += r.calculatedMeals;
-                            }
-
-                            final int mealRatePaisa = totalCalcMeals > 0
-                                ? (totalFoodExpensePaisa / totalCalcMeals)
-                                    .round()
-                                : 0;
-
-                            return ListView(
-                              padding: const EdgeInsets.all(16),
-                              children: [
-                                Card(
-                                  color: AppColors.darkNavy,
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(18),
-                                    child: Column(
-                                      children: [
-                                        Text(
-                                          'Live Meal Rate: ${BdtFormatter.formatPaisa(mealRatePaisa)} / meal',
-                                          style: const TextStyle(
-                                              color: AppColors.emeraldLight,
-                                              fontSize: 20,
-                                              fontWeight: FontWeight.w800),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          'Total Food Expense: ${BdtFormatter.formatPaisa(totalFoodExpensePaisa)} • Total Calc. Meals: $totalCalcMeals',
-                                          style: const TextStyle(
-                                              color: Colors.white70),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                ...members.map((m) {
-                                  final uid = m.id;
-                                  final name =
-                                      m.data()['displayName'] ?? 'Member';
-                                  final calcMeals = memberCalcMap[uid] ?? 40.0;
-                                  final mealCostPaisa =
-                                      (calcMeals * mealRatePaisa).round();
-
-                                  int depPaisa = 0;
-                                  for (final d in deposits) {
-                                    if (d['memberId'] == uid) {
-                                      depPaisa +=
-                                          (d['amountPaisa'] as num?)?.toInt() ??
-                                              0;
-                                    }
-                                  }
-
-                                  final netPaisa = depPaisa - mealCostPaisa;
-                                  return Card(
-                                    child: ListTile(
-                                      title: Text('$name',
-                                          style: const TextStyle(
-                                              fontWeight: FontWeight.w700)),
-                                      subtitle: Text(
-                                          'Deposit: ${BdtFormatter.formatPaisa(depPaisa)} • Meal Cost ($calcMeals): ${BdtFormatter.formatPaisa(mealCostPaisa)}'),
-                                      trailing: Text(
-                                        BdtFormatter.formatPaisa(netPaisa),
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w800,
-                                          color: netPaisa < 0
-                                              ? AppColors.dangerRed
-                                              : AppColors.emeraldPrimary,
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                }),
-                              ],
-                            );
-                          },
-                        );
-                      },
-                    );
-                  },
-                );
-              },
-            ),
-            Scaffold(
-              floatingActionButton: role.isManagement
-                  ? FloatingActionButton.extended(
-                      onPressed: () =>
-                          _showAddExpenseDialog(context, db, periodId),
-                      icon: const Icon(Icons.add_shopping_cart),
-                      label: const Text('Add Expense'),
-                    )
-                  : null,
-              body: StreamBuilder<QuerySnap>(
-                stream: db
-                    .collection('expenses')
-                    .where('periodId', isEqualTo: periodId)
-                    .snapshots(),
-                builder: (context, snap) {
-                  final docs = snap.data?.docs ?? [];
-                  return ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: docs.length,
-                    itemBuilder: (context, i) {
-                      final d = docs[i].data();
-                      return Card(
-                        child: ListTile(
-                          title: Text(d['description'] ?? 'Expense'),
-                          subtitle: Text(d['expenseDate'] ?? ''),
-                          trailing: Text(
-                            BdtFormatter.formatPaisa(
-                                (d['amountPaisa'] as num?)?.toInt() ?? 0),
-                            style: const TextStyle(fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-            Scaffold(
-              floatingActionButton: role.isManagement
-                  ? FloatingActionButton.extended(
-                      onPressed: () =>
-                          _showAddDepositDialog(context, db, periodId),
-                      icon: const Icon(Icons.account_balance_wallet),
-                      label: const Text('Add Deposit'),
-                    )
-                  : null,
-              body: StreamBuilder<QuerySnap>(
-                stream: db
-                    .collection('deposits')
-                    .where('periodId', isEqualTo: periodId)
-                    .snapshots(),
-                builder: (context, snap) {
-                  final docs = snap.data?.docs ?? [];
-                  return ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: docs.length,
-                    itemBuilder: (context, i) {
-                      final d = docs[i].data();
-                      return Card(
-                        child: ListTile(
-                          title: Text(
-                              'Member ID: ${d['memberId']} (${d['paymentMethod']})'),
-                          subtitle: Text(d['depositDate'] ?? ''),
-                          trailing: Text(
-                            BdtFormatter.formatPaisa(
-                                (d['amountPaisa'] as num?)?.toInt() ?? 0),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.emeraldPrimary,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showAddExpenseDialog(
-    BuildContext context,
-    DocRef db,
-    String periodId,
-  ) {
-    final descCtrl = TextEditingController();
-    final amtCtrl = TextEditingController();
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add Bazar / Mess Expense'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: descCtrl,
-              decoration: const InputDecoration(labelText: 'Description'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: amtCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Amount in BDT (৳)'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final paisa = BdtFormatter.parseTakaToPaisa(amtCtrl.text);
-              if (paisa <= 0) return;
-              final ref = db.collection('expenses').doc();
-              await ref.set({
-                'expenseId': ref.id,
-                'periodId': periodId,
-                'category': 'bazar',
-                'isMealExpense': true,
-                'description': descCtrl.text.trim(),
-                'amountPaisa': paisa,
-                'paidBy': user.uid,
-                'expenseDate': DhakaDate.dateId(DhakaDate.now()),
-                'createdBy': user.uid,
-                'idempotencyKey': const Uuid().v4(),
-                'status': 'verified',
-                'createdAt': FieldValue.serverTimestamp(),
-                'updatedAt': FieldValue.serverTimestamp(),
-              });
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAddDepositDialog(
-    BuildContext context,
-    DocRef db,
-    String periodId,
-  ) {
-    final amtCtrl = TextEditingController();
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Record Member Deposit'),
-        content: TextField(
-          controller: amtCtrl,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(labelText: 'Deposit Amount (৳)'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final paisa = BdtFormatter.parseTakaToPaisa(amtCtrl.text);
-              if (paisa <= 0) return;
-              final ref = db.collection('deposits').doc();
-              await ref.set({
-                'depositId': ref.id,
-                'periodId': periodId,
-                'memberId': user.uid,
-                'amountPaisa': paisa,
-                'paymentMethod': 'cash',
-                'depositDate': DhakaDate.dateId(DhakaDate.now()),
-                'receivedBy': user.uid,
-                'idempotencyKey': const Uuid().v4(),
-                'status': 'confirmed',
-                'createdAt': FieldValue.serverTimestamp(),
-              });
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Save Deposit'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ============================================================================
-// 10. DAILY MENU & BANGLA COOKING STAFF MODE
-// ============================================================================
-
-class DailyMenuScreen extends StatelessWidget {
-  const DailyMenuScreen({
-    super.key,
-    required this.messId,
-    required this.user,
-    required this.role,
-  });
-
-  final String messId;
-  final User user;
-  final AppRole role;
-
-  @override
-  Widget build(BuildContext context) {
-    final todayId = DhakaDate.dateId(DhakaDate.now());
-    final db = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(messId)
-        .collection('dailyMenus')
-        .doc(todayId);
-
-    return Scaffold(
-      appBar: AppBar(title: Text('Daily Cooking Menu ($todayId)')),
-      floatingActionButton: role.isManagement
-          ? FloatingActionButton.extended(
-              onPressed: () => _publishDialog(context, db, todayId),
-              icon: const Icon(Icons.edit),
-              label: const Text('Publish Menu'),
-            )
-          : null,
-      body: StreamBuilder<QuerySnap>(
-        stream: db.collection('items').snapshots(),
-        builder: (context, snap) {
-          final docs = snap.data?.docs ?? [];
-          if (docs.isEmpty) {
-            return const Center(
-                child: Text('No menu published for today yet.'));
-          }
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: docs.length,
-            itemBuilder: (context, i) {
-              final d = docs[i].data();
-              return Card(
-                child: ListTile(
-                  leading: const Icon(Icons.restaurant,
-                      color: AppColors.emeraldPrimary, size: 32),
-                  title: Text(
-                      '${(d['mealType'] ?? 'lunch').toString().toUpperCase()} • ${d['itemNameBn'] ?? d['itemName']}',
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                  subtitle: Text(
-                      'Category: ${d['foodCategory']} • People: ${d['servingCount']} • Qty: ${d['quantity']} kg'),
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-
-  void _publishDialog(
-    BuildContext context,
-    DocRef menuRef,
-    String todayId,
-  ) {
-    final nameBnCtrl = TextEditingController(text: 'রুই মাছ ভুনা, ডাল ও ভাত');
-    final servingsCtrl = TextEditingController(text: '8');
-    String cat = 'fish';
-
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: const Text('Publish Menu (Fixed Image Category)'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<String>(
-                value: cat,
-                items: const [
-                  DropdownMenuItem(
-                      value: 'regular', child: Text('Regular (ডাল-ভাত-ভাজি)')),
-                  DropdownMenuItem(
-                      value: 'fish', child: Text('Fish (মাছ ও ভাত)')),
-                  DropdownMenuItem(
-                      value: 'meat', child: Text('Meat (মাংস ও ভাত)')),
-                  DropdownMenuItem(
-                      value: 'special', child: Text('Special (বিরিয়ানি/পোলাও)')),
-                ],
-                onChanged: (v) => setState(() => cat = v ?? 'regular'),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: nameBnCtrl,
-                decoration:
-                    const InputDecoration(labelText: 'খাবারের নাম (বাংলা)'),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: servingsCtrl,
-                keyboardType: TextInputType.number,
-                decoration:
-                    const InputDecoration(labelText: 'মোট মানুষ (Headcount)'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                await menuRef.set({
-                  'menuId': todayId,
-                  'menuDate': todayId,
-                  'status': 'published',
-                  'publishedBy': user.uid,
-                  'publishedAt': FieldValue.serverTimestamp(),
-                  'updatedAt': FieldValue.serverTimestamp(),
-                  'cookingStatus': {
-                    'breakfastDone': false,
-                    'lunchDone': false,
-                    'dinnerDone': false,
-                  },
-                }, SetOptions(merge: true));
-
-                await menuRef.collection('items').doc('lunch').set({
-                  'itemId': 'lunch',
-                  'mealType': 'lunch',
-                  'itemName': nameBnCtrl.text.trim(),
-                  'itemNameBn': nameBnCtrl.text.trim(),
-                  'foodCategory': cat,
-                  'imageKey': cat,
-                  'quantity': 2.0,
-                  'unit': 'kg',
-                  'servingCount': int.tryParse(servingsCtrl.text) ?? 8,
-                });
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
-              child: const Text('Publish'),
-            ),
-          ],
-        ),
-      ),
+    return const Scaffold(
+      body: Center(child: Text('Hisab & Ledger')),
     );
   }
 }
@@ -1787,389 +752,13 @@ class CookingStaffModeView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final todayId = DhakaDate.dateId(DhakaDate.now());
-    final menuRef = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(messId)
-        .collection('dailyMenus')
-        .doc(todayId);
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('বাবুর্চি মোড — আজকের রান্না',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-      ),
-      body: StreamBuilder<DocSnap>(
-        stream: menuRef.snapshots(),
-        builder: (context, menuSnap) {
-          final statusMap =
-              menuSnap.data?.data()?['cookingStatus'] as JsonMap? ?? {};
-          final bool lunchDone = statusMap['lunchDone'] == true;
-
-          return StreamBuilder<QuerySnap>(
-            stream: menuRef.collection('items').snapshots(),
-            builder: (context, itemsSnap) {
-              final docs = itemsSnap.data?.docs ?? [];
-              if (docs.isEmpty) {
-                return const Center(
-                  child: Text(
-                    'আজকের জন্য এখনো কোনো মেনু দেওয়া হয়নি।',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
-                  ),
-                );
-              }
-              return ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: docs.length,
-                itemBuilder: (context, i) {
-                  final d = docs[i].data();
-                  return Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            '${d['itemNameBn'] ?? d['itemName']}',
-                            style: const TextStyle(
-                                fontSize: 26, fontWeight: FontWeight.w900),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'মোট মানুষ: ${d['servingCount']} জন • পরিমাণ: ${d['quantity']} কেজি',
-                            style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.emeraldPrimary),
-                          ),
-                          const SizedBox(height: 20),
-                          SizedBox(
-                            height: 60,
-                            child: ElevatedButton.icon(
-                              icon: Icon(
-                                lunchDone
-                                    ? Icons.check_circle
-                                    : Icons.soup_kitchen,
-                                size: 30,
-                              ),
-                              label: Text(
-                                lunchDone
-                                    ? 'রান্না শেষ হয়েছে ✓'
-                                    : 'রান্না শেষ হলে এখানে চাপুন',
-                                style: const TextStyle(
-                                    fontSize: 22, fontWeight: FontWeight.w800),
-                              ),
-                              onPressed: () => menuRef.update({
-                                'cookingStatus': {
-                                  'breakfastDone':
-                                      statusMap['breakfastDone'] ?? false,
-                                  'lunchDone': !lunchDone,
-                                  'dinnerDone':
-                                      statusMap['dinnerDone'] ?? false,
-                                },
-                                'updatedAt': FieldValue.serverTimestamp(),
-                              }),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              );
-            },
-          );
-        },
-      ),
+    return const Scaffold(
+      body: Center(child: Text('বাবুর্চি মোড (Cooking Staff Mode)')),
     );
   }
 }
 
-// ============================================================================
-// 11. DUTIES, SHOPPING/INVENTORY, NOTICES, VACATIONS, CHAT & ROLES
-// ============================================================================
-
-class DutiesScreen extends StatelessWidget {
-  const DutiesScreen({
-    super.key,
-    required this.messId,
-    required this.user,
-    required this.role,
-  });
-  final String messId;
-  final User user;
-  final AppRole role;
-
-  @override
-  Widget build(BuildContext context) {
-    final col = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(messId)
-        .collection('dutyAssignments');
-    return Scaffold(
-      appBar: AppBar(title: const Text('Cleaning & Household Duties')),
-      floatingActionButton: role.isManagement
-          ? FloatingActionButton.extended(
-              onPressed: () async {
-                final ref = col.doc();
-                await ref.set({
-                  'assignmentId': ref.id,
-                  'dutyId': 'kitchen',
-                  'dutyTitle': 'Kitchen & Dining Cleaning',
-                  'category': 'kitchen',
-                  'assignedTo': user.uid,
-                  'assignedToName': user.displayName ?? 'Member',
-                  'dueDate': Timestamp.fromDate(
-                      DhakaDate.now().add(const Duration(days: 1))),
-                  'status': 'pending',
-                  'assignedBy': user.uid,
-                });
-              },
-              icon: const Icon(Icons.add_task),
-              label: const Text('Assign Duty'),
-            )
-          : null,
-      body: StreamBuilder<QuerySnap>(
-        stream: col.snapshots(),
-        builder: (context, snap) {
-          final docs = snap.data?.docs ?? [];
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: docs.length,
-            itemBuilder: (context, i) {
-              final d = docs[i].data();
-              return Card(
-                child: ListTile(
-                  title: Text(d['dutyTitle'] ?? 'Duty'),
-                  subtitle: Text(
-                      'Assigned: ${d['assignedToName']} • Status: ${d['status']}'),
-                  trailing: d['status'] == 'pending'
-                      ? ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                              minimumSize: const Size(80, 36)),
-                          onPressed: () => docs[i].reference.update({
-                            'status': 'submitted',
-                            'completionNote': 'Done',
-                            'submittedAt': FieldValue.serverTimestamp(),
-                          }),
-                          child: const Text('Done'),
-                        )
-                      : Chip(label: Text('${d['status']}')),
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-
-class ShoppingAndInventoryScreen extends StatelessWidget {
-  const ShoppingAndInventoryScreen({
-    super.key,
-    required this.messId,
-    required this.user,
-    required this.role,
-  });
-  final String messId;
-  final User user;
-  final AppRole role;
-
-  @override
-  Widget build(BuildContext context) {
-    final col = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(messId)
-        .collection('inventoryItems');
-    return Scaffold(
-      appBar: AppBar(title: const Text('Grocery Inventory & Stock')),
-      floatingActionButton: role.isManagement
-          ? FloatingActionButton.extended(
-              onPressed: () async {
-                final ref = col.doc();
-                await ref.set({
-                  'itemId': ref.id,
-                  'itemName': 'Miniket Rice (মিনিকেট চাল)',
-                  'category': 'grain',
-                  'currentQuantity': 25.0,
-                  'unit': 'kg',
-                  'lowStockThreshold': 5.0,
-                  'updatedAt': FieldValue.serverTimestamp(),
-                });
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('Add Stock Item'),
-            )
-          : null,
-      body: StreamBuilder<QuerySnap>(
-        stream: col.snapshots(),
-        builder: (context, snap) {
-          final docs = snap.data?.docs ?? [];
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: docs.length,
-            itemBuilder: (context, i) {
-              final d = docs[i].data();
-              return Card(
-                child: ListTile(
-                  title: Text(d['itemName'] ?? 'Item'),
-                  subtitle:
-                      Text('Stock: ${d['currentQuantity']} ${d['unit']}'),
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-
-class NoticesAndComplaintsScreen extends StatelessWidget {
-  const NoticesAndComplaintsScreen({
-    super.key,
-    required this.messId,
-    required this.user,
-    required this.role,
-  });
-  final String messId;
-  final User user;
-  final AppRole role;
-
-  @override
-  Widget build(BuildContext context) {
-    final col = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(messId)
-        .collection('notices');
-    return Scaffold(
-      appBar: AppBar(title: const Text('Notices & Announcements')),
-      floatingActionButton: role.isManagement
-          ? FloatingActionButton.extended(
-              onPressed: () async {
-                final ref = col.doc();
-                await ref.set({
-                  'noticeId': ref.id,
-                  'title': 'Monthly Mess Meeting',
-                  'body': 'Please clear all bazar and utility dues by the 10th.',
-                  'priority': 'normal',
-                  'publishedBy': user.uid,
-                  'publisherName': user.displayName ?? 'Admin',
-                  'createdAt': FieldValue.serverTimestamp(),
-                });
-              },
-              icon: const Icon(Icons.campaign),
-              label: const Text('Post Notice'),
-            )
-          : null,
-      body: StreamBuilder<QuerySnap>(
-        stream: col.orderBy('createdAt', descending: true).snapshots(),
-        builder: (context, snap) {
-          final docs = snap.data?.docs ?? [];
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: docs.length,
-            itemBuilder: (context, i) {
-              final d = docs[i].data();
-              return Card(
-                child: ListTile(
-                  title: Text(d['title'] ?? '',
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                  subtitle: Text(d['body'] ?? ''),
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-
-class VacationScreen extends StatelessWidget {
-  const VacationScreen({
-    super.key,
-    required this.messId,
-    required this.user,
-    required this.role,
-  });
-  final String messId;
-  final User user;
-  final AppRole role;
-
-  @override
-  Widget build(BuildContext context) {
-    final col = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(messId)
-        .collection('vacationRequests');
-    final periodId = DhakaDate.periodId(DhakaDate.now());
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Vacation & Leave Requests')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final ref = col.doc();
-          final start = DhakaDate.now().add(const Duration(days: 1));
-          final end = DhakaDate.now().add(const Duration(days: 7));
-          await ref.set({
-            'requestId': ref.id,
-            'periodId': periodId,
-            'overlapPeriods': [periodId],
-            'memberId': user.uid,
-            'memberName': user.displayName ?? 'Member',
-            'leaveType': 'home',
-            'startDate': DhakaDate.dateId(start),
-            'endDate': DhakaDate.dateId(end),
-            'totalDays': 7,
-            'reason': 'Home Visit',
-            'status': 'pending',
-            'approvedBy': null,
-            'approvedAt': null,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-        },
-        icon: const Icon(Icons.luggage),
-        label: const Text('Request 7d Leave'),
-      ),
-      body: StreamBuilder<QuerySnap>(
-        stream: col.snapshots(),
-        builder: (context, snap) {
-          final docs = snap.data?.docs ?? [];
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: docs.length,
-            itemBuilder: (context, i) {
-              final d = docs[i].data();
-              final status = d['status'] ?? 'pending';
-              return Card(
-                child: ListTile(
-                  title: Text('${d['memberName']} • ${d['totalDays']} Days'),
-                  subtitle: Text(
-                      '${d['startDate']} to ${d['endDate']} • Status: $status'),
-                  trailing: (role.isAdminOrOwner && status == 'pending')
-                      ? IconButton(
-                          icon: const Icon(Icons.check_circle,
-                              color: AppColors.emeraldPrimary),
-                          onPressed: () => docs[i].reference.update({
-                            'status': 'approved',
-                            'approvedBy': user.uid,
-                            'approvedAt': FieldValue.serverTimestamp(),
-                          }),
-                        )
-                      : Chip(label: Text('$status')),
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-
-class GroupChatTab extends StatefulWidget {
+class GroupChatTab extends StatelessWidget {
   const GroupChatTab({
     super.key,
     required this.messId,
@@ -2181,238 +770,28 @@ class GroupChatTab extends StatefulWidget {
   final AppRole role;
 
   @override
-  State<GroupChatTab> createState() => _GroupChatTabState();
-}
-
-class _GroupChatTabState extends State<GroupChatTab> {
-  final _ctrl = TextEditingController();
-
-  Future<void> _send() async {
-    final text = _ctrl.text.trim();
-    if (text.isEmpty) return;
-    _ctrl.clear();
-    final ref = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(widget.messId)
-        .collection('chatMessages')
-        .doc();
-    await ref.set({
-      'messageId': ref.id,
-      'senderId': widget.user.uid,
-      'senderName': widget.user.displayName ?? 'Member',
-      'senderRole': widget.role.value,
-      'text': text,
-      'isDeleted': false,
-      'isFlagged': false,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final stream = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(widget.messId)
-        .collection('chatMessages')
-        .orderBy('createdAt', descending: true)
-        .limit(30)
-        .snapshots();
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Mess Group Chat')),
-      body: Column(
-        children: [
-          Expanded(
-            child: StreamBuilder<QuerySnap>(
-              stream: stream,
-              builder: (context, snap) {
-                final docs = snap.data?.docs ?? [];
-                return ListView.builder(
-                  reverse: true,
-                  padding: const EdgeInsets.all(16),
-                  itemCount: docs.length,
-                  itemBuilder: (context, i) {
-                    final d = docs[i].data();
-                    return Card(
-                      child: ListTile(
-                        title: Text(
-                            '${d['senderName']} (${d['senderRole']})',
-                            style: const TextStyle(
-                                fontSize: 12, fontWeight: FontWeight.w800)),
-                        subtitle: Text(d['text'] ?? ''),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _ctrl,
-                    decoration: const InputDecoration(
-                      hintText: 'Write message to mess...',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton.filled(
-                  onPressed: _send,
-                  icon: const Icon(Icons.send),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return const Scaffold(
+      body: Center(child: Text('Group Chat')),
     );
   }
 }
 
-class ProfileAndMembersTab extends ConsumerWidget {
+class ProfileAndMembersTab extends StatelessWidget {
   const ProfileAndMembersTab({
     super.key,
     required this.messId,
     required this.user,
     required this.role,
   });
-
   final String messId;
   final User user;
   final AppRole role;
 
-  Future<void> _generateInvite(BuildContext context) async {
-    final rand = Random.secure();
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    String part(int n) =>
-        List.generate(n, (_) => chars[rand.nextInt(chars.length)]).join();
-    final code = 'BP-${part(4)}-${part(2)}';
-
-    final ref = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(messId)
-        .collection('invitations')
-        .doc();
-    await ref.set({
-      'invitationId': ref.id,
-      'inviteCode': code,
-      'targetRole': 'member',
-      'createdBy': user.uid,
-      'expiresAt':
-          Timestamp.fromDate(DateTime.now().add(const Duration(days: 7))),
-      'maxUses': 10,
-      'usedCount': 0,
-      'status': 'active',
-    });
-
-    if (context.mounted) {
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Mess Invite Code Generated'),
-          content: SelectableText(
-            code,
-            style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w900,
-                color: AppColors.emeraldPrimary),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: code));
-                Navigator.pop(ctx);
-              },
-              child: const Text('Copy & Close'),
-            ),
-          ],
-        ),
-      );
-    }
-  }
-
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final isBn = ref.watch(isBanglaProvider);
-    final membersCol = FirebaseFirestore.instance
-        .collection('messes')
-        .doc(messId)
-        .collection('members');
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Members, Roles & Settings'),
-        actions: [
-          if (role.isAdminOrOwner)
-            IconButton(
-              tooltip: 'Generate Invite Code',
-              icon: const Icon(Icons.person_add),
-              onPressed: () => _generateInvite(context),
-            ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: SwitchListTile(
-              title: const Text('বাংলা ভাষা ব্যবহার করুন (Bangla UI)'),
-              value: isBn,
-              onChanged: (v) => ref.read(isBanglaProvider.notifier).state = v,
-            ),
-          ),
-          const SizedBox(height: 12),
-          const Text('Mess Members & Role Management',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          StreamBuilder<QuerySnap>(
-            stream: membersCol.snapshots(),
-            builder: (context, snap) {
-              final docs = snap.data?.docs ?? [];
-              return Column(
-                children: docs.map((d) {
-                  final m = d.data();
-                  final mRole = AppRole.fromString(m['role'] as String?);
-                  return Card(
-                    child: ListTile(
-                      title: Text(m['displayName'] ?? 'Member',
-                          style: const TextStyle(fontWeight: FontWeight.w700)),
-                      subtitle: Text('${mRole.labelEn} • ${mRole.labelBn}'),
-                      trailing: (role.isAdminOrOwner && mRole != AppRole.owner)
-                          ? DropdownButton<String>(
-                              value: mRole.value,
-                              items: const [
-                                DropdownMenuItem(
-                                    value: 'co_admin',
-                                    child: Text('Co-Admin')),
-                                DropdownMenuItem(
-                                    value: 'manager', child: Text('Manager')),
-                                DropdownMenuItem(
-                                    value: 'member', child: Text('Member')),
-                                DropdownMenuItem(
-                                    value: 'cooking_staff',
-                                    child: Text('Cooking Staff')),
-                              ],
-                              onChanged: (newRole) {
-                                if (newRole != null) {
-                                  d.reference.update({'role': newRole});
-                                }
-                              },
-                            )
-                          : Chip(label: Text(mRole.labelEn)),
-                    ),
-                  );
-                }).toList(),
-              );
-            },
-          ),
-        ],
-      ),
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(child: Text('Profile & Settings')),
     );
   }
 }
